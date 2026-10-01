@@ -1,0 +1,11 @@
+{
+  "name": "@fsm/shared",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pure game logic (AMM, economy, types) shared by Cloud Functions and the web app",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

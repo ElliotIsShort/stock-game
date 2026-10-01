@@ -1,0 +1,22 @@
+name: Weekly close
+
+on:
+  schedule:
+    # Sundays 20:00 UTC. The function skips if a close ran recently
+    # (config: minHoursBetweenAutoCloses), so an admin manual close is safe.
+    - cron: "0 20 * * 0"
+  workflow_dispatch:
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping weeklyCloseCron
+        env:
+          CLOSE_URL: ${{ secrets.WEEKLY_CLOSE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body -sS -X POST "$CLOSE_URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d '{}'

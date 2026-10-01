@@ -1,0 +1,22 @@
+{
+  "name": "friend-stock-market",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "shared",
+    "functions",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w functions && npm run build -w web",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w functions && npm run typecheck -w web",
+    "dev:web": "npm run dev -w web",
+    "emulators": "npm run build -w functions && firebase emulators:start",
+    "deploy:backend": "npm run build -w functions && firebase deploy --only functions,firestore"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "firebase-tools": "15.32.0",
+    "typescript": "5.9.3"
+  }
+}

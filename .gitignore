@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+functions/lib/
+*.log
+.env
+.env.local
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+.secret.local
+functions/.secret.local

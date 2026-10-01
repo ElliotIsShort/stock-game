@@ -1,0 +1,50 @@
+rules_version = '2';
+
+// All writes go through Cloud Functions (Admin SDK bypasses these rules).
+// Clients can only read, so cash, pool and price fields can never be
+// written directly from the browser.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function isPlayer() {
+      return signedIn() && exists(/databases/$(database)/documents/players/$(request.auth.uid));
+    }
+    function member() {
+      return isPlayer() || isAdmin();
+    }
+
+    match /players/{uid} {
+      allow read: if member() || (signedIn() && request.auth.uid == uid);
+      allow write: if false;
+    }
+    match /stocks/{id}         { allow read: if member(); allow write: if false; }
+    match /holdings/{id}       { allow read: if member(); allow write: if false; }
+    match /trades/{id}         { allow read: if member(); allow write: if false; }
+    match /posts/{id}          { allow read: if member(); allow write: if false; }
+    match /weeklyReports/{id}  { allow read: if member(); allow write: if false; }
+    match /meta/{id}           { allow read: if member(); allow write: if false; }
+    match /config/{id}         { allow read: if signedIn(); allow write: if false; }
+
+    match /registrations/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow write: if false;
+    }
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /auditLog/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

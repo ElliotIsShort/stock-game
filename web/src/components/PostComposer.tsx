@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, errorMessage } from "@/lib/api";
 import { useGame } from "./GameProvider";
 
@@ -24,6 +24,14 @@ export function PostComposer({
   const [tag, setTag] = useState(defaultTag ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Seconds left on the post cooldown after a successful post.
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = setInterval(() => setCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [cooldown]);
 
   if (!me?.isActive) return null;
 
@@ -35,6 +43,8 @@ export function PostComposer({
     try {
       await api.createPost({ text: text.trim(), taggedStockId: linkedTradeId ? null : tag || null, linkedTradeId: linkedTradeId ?? null });
       setText("");
+      // Trade-linked posts aren't rate-limited server-side, so only count down standalone posts.
+      if (!linkedTradeId) setCooldown(config.postCooldownSeconds);
       onDone?.();
     } catch (err) {
       setError(errorMessage(err));
@@ -69,7 +79,9 @@ export function PostComposer({
           </label>
         )}
         <span className="muted small">{text.length}/{config.maxPostLength}</span>
-        <button type="submit" className="primary" disabled={busy || !text.trim()}>Post</button>
+        <button type="submit" className="primary" disabled={busy || !text.trim() || cooldown > 0}>
+          {cooldown > 0 ? `Wait ${cooldown}s` : "Post"}
+        </button>
         {onDone && <button type="button" onClick={onDone}>Cancel</button>}
       </div>
       {error && <p className="error small" role="alert">{error}</p>}

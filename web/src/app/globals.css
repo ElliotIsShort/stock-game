@@ -42,11 +42,22 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
   padding: .75rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--panel);
   position: sticky; top: 0; z-index: 10;
 }
-.brand { font-weight: 700; color: var(--text); }
+.brand { font-weight: 700; color: var(--text); display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; }
+.brand-short { display: none; }
 .topbar nav { display: flex; gap: .25rem; flex-wrap: wrap; flex: 1; }
 .topbar nav a { padding: .35rem .7rem; border-radius: 6px; color: var(--muted); }
 .topbar nav a[aria-current="page"], .topbar nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
 .me { display: flex; gap: .9rem; align-items: center; font-variant-numeric: tabular-nums; }
+
+/* On narrow screens, shorten the brand and give the nav the full width below it. */
+@media (max-width: 600px) {
+  .topbar { gap: .5rem .75rem; padding: .6rem .9rem; }
+  .brand-full { display: none; }
+  .brand-short { display: inline; }
+  .topbar nav { order: 3; flex-basis: 100%; }
+  .me { gap: .75rem; margin-left: auto; font-size: .9rem; }
+}
+
 .page { max-width: 1000px; margin: 0 auto; padding: 1.25rem; }
 .stack { display: flex; flex-direction: column; gap: 1rem; }
 .row { display: flex; gap: .5rem; align-items: center; }

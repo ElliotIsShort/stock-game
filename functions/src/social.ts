@@ -24,6 +24,13 @@ export const createPost = onCall(async (req) => {
     const player = playerSnap.data() as Player;
     if (!player.isActive) throw new HttpsError("permission-denied", "Your account is delisted.");
 
+    // Spam guard: enforce a per-player cooldown between standalone posts.
+    const cooldownMs = cfg.postCooldownSeconds * 1000;
+    if (cooldownMs > 0 && player.lastPostAt && now - player.lastPostAt < cooldownMs) {
+      const wait = Math.ceil((cooldownMs - (now - player.lastPostAt)) / 1000);
+      throw new HttpsError("resource-exhausted", `You're posting too fast. Try again in ${wait}s.`);
+    }
+
     let taggedName: string | null = null;
     let tradeDoc: Trade | null = null;
     let effectiveTag = taggedStockId;
@@ -63,7 +70,7 @@ export const createPost = onCall(async (req) => {
     };
     tx.set(postRef, post);
     if (tradeDoc) tx.update(db.doc(`trades/${tradeDoc.id}`), { linkedPostId: postRef.id });
-    tx.update(refs.player(uid), { lastActiveAt: now, isIdle: false });
+    tx.update(refs.player(uid), { lastActiveAt: now, isIdle: false, lastPostAt: now });
     return post;
   });
 });

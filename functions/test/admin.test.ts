@@ -64,6 +64,7 @@ describe("full reset", () => {
   it("wipes game data back to day one, keeps settings/admins/audit, and re-queues players", async () => {
     // Build up some history.
     await call(bob, "trade", { stockId: cara.uid, side: "buy", amount: 200, postText: "to the moon" });
+    await call(alice, "updateConfig", { patch: { postCooldownSeconds: 0 } });
     await call(bob, "createPost", { text: "hello" });
     await call(bob, "setStockPhoto", { photo: "data:image/jpeg;base64,/9j/4AAQ" });
     await call(alice, "updateConfig", { patch: { weeklyAllowance: 250 } });

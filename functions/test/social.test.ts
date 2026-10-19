@@ -7,6 +7,9 @@ let cara: User;
 beforeEach(async () => {
   await wipeEmulators();
   [alice, bob, cara] = await setupPlayers("Alice", "Bob", "Cara");
+  // Most post tests fire several posts back-to-back; turn the spam cooldown
+  // off so it doesn't interfere. The cooldown has its own block below.
+  await call(alice, "updateConfig", { patch: { postCooldownSeconds: 0 } });
 });
 
 describe("posts (§7)", () => {
@@ -41,6 +44,23 @@ describe("posts (§7)", () => {
   it("enforces the length limit and requires text", async () => {
     await expectCallError(call(bob, "createPost", { text: "x".repeat(501) }), "INVALID_ARGUMENT");
     await expectCallError(call(bob, "createPost", { text: "   " }), "INVALID_ARGUMENT");
+  });
+});
+
+describe("post cooldown (spam guard)", () => {
+  it("blocks a second post inside the cooldown window, per player", async () => {
+    await call(alice, "updateConfig", { patch: { postCooldownSeconds: 3600 } });
+    await call(bob, "createPost", { text: "first" });
+    await expectCallError(call(bob, "createPost", { text: "second" }), "RESOURCE_EXHAUSTED");
+    // The cooldown is per player: Cara is unaffected.
+    await call(cara, "createPost", { text: "mine" });
+    expect((await getDoc(`players/${bob.uid}`)).lastPostAt).toBeTypeOf("number");
+  });
+
+  it("allows back-to-back posts when the cooldown is 0", async () => {
+    await call(bob, "createPost", { text: "one" });
+    await call(bob, "createPost", { text: "two" });
+    expect((await listDocs("posts")).filter((p) => p.authorId === bob.uid)).toHaveLength(2);
   });
 });
 

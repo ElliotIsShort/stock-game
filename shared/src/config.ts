@@ -15,6 +15,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   flagCollusionMinTrades: 3,
   minHoursBetweenAutoCloses: 144,
   maxPostLength: 500,
+  postCooldownSeconds: 10,
 };
 
 interface Bound {
@@ -40,6 +41,7 @@ export const CONFIG_BOUNDS: Record<keyof GameConfig, Bound> = {
   flagCollusionMinTrades: { min: 1, max: 1000, integer: true, label: "Flag: back-and-forth trades", help: "Min trades each way between two players to flag" },
   minHoursBetweenAutoCloses: { min: 0, max: 1000, label: "Min hours between automatic closes", help: "Cron-triggered closes are skipped inside this window" },
   maxPostLength: { min: 10, max: 5000, integer: true, label: "Max post length", help: "Characters" },
+  postCooldownSeconds: { min: 0, max: 3600, integer: true, label: "Post cooldown (seconds)", help: "Minimum seconds between a player's posts; 0 disables it" },
 };
 
 export function mergeConfig(stored: Partial<GameConfig> | undefined | null): GameConfig {

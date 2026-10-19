@@ -43,7 +43,11 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <>
       <header className="topbar">
-        <Link href="/" className="brand">📈 Friend Stock Market</Link>
+        <Link href="/" className="brand" aria-label="Friend Stock Market">
+          <span aria-hidden="true">📈</span>
+          <span className="brand-full">Friend Stock Market</span>
+          <span className="brand-short" aria-hidden="true">FSM</span>
+        </Link>
         <nav aria-label="Main">
           {nav.map((n) => (
             <Link key={n.href} href={n.href} aria-current={path === n.href || path === n.href.replace(/\/$/, "") ? "page" : undefined}>

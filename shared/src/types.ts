@@ -30,6 +30,8 @@ export interface GameConfig {
   minHoursBetweenAutoCloses: number;
   /** Max post length in characters. */
   maxPostLength: number;
+  /** Minimum seconds between a player's standalone posts. 0 disables the cooldown. */
+  postCooldownSeconds: number;
 }
 
 export interface GameState {
@@ -60,6 +62,8 @@ export interface Player {
   totalBonus: number;
   /** Net worth snapshot at the start of the current week (weekly prize). */
   netWorthWeekStart: number;
+  /** When the player last created a standalone post (post cooldown, §spam). Absent for players who haven't posted. */
+  lastPostAt?: number;
 }
 
 export interface Stock {

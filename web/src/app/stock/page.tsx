@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import type { Trade } from "@fsm/shared";
@@ -9,6 +9,9 @@ import { Feed } from "@/components/Feed";
 import { PostComposer } from "@/components/PostComposer";
 import { PriceChart } from "@/components/PriceChart";
 import { TradePanel } from "@/components/TradePanel";
+import { Avatar } from "@/components/Avatar";
+import { PhotoEditor } from "@/components/PhotoEditor";
+import { api, errorMessage } from "@/lib/api";
 import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
 import { changeClass, gbp, pct, shares } from "@/lib/format";
@@ -23,8 +26,19 @@ export default function StockPage() {
 
 function StockView() {
   const id = useSearchParams().get("id") ?? "";
-  const { stockById, holdings, playerById, me } = useGame();
+  const { stockById, holdings, playerById, me, isAdmin, photoOf } = useGame();
   const stock = stockById.get(id);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+
+  async function removePhoto() {
+    if (!stock || !window.confirm(`Remove ${stock.displayName}'s photo? This is audit-logged.`)) return;
+    setPhotoError(null);
+    try {
+      await api.setStockPhoto(null, stock.id);
+    } catch (err) {
+      setPhotoError(errorMessage(err));
+    }
+  }
 
   const history = useQuery<Trade>(
     id ? query(collection(fb().db, "trades"), where("stockId", "==", id), orderBy("createdAt", "desc"), limit(300)) : null,
@@ -53,15 +67,22 @@ function StockView() {
   return (
     <div className="stack">
       <div className="row between wrap">
-        <div>
-          <h1>
-            {stock.displayName}
-            {owner?.isIdle && <span className="muted small"> · idle</span>}
-            {!stock.listed && <span className="muted small"> · delisted</span>}
-          </h1>
-          <p className="big">
-            {gbp(stock.price)} <span className={changeClass(change)}>{pct(change)} this week</span>
-          </p>
+        <div className="row">
+          <Avatar uid={stock.id} name={stock.displayName} size={72} />
+          <div>
+            <h1>
+              {stock.displayName}
+              {owner?.isIdle && <span className="muted small"> · idle</span>}
+              {!stock.listed && <span className="muted small"> · delisted</span>}
+            </h1>
+            <p className="big">
+              {gbp(stock.price)} <span className={changeClass(change)}>{pct(change)} this week</span>
+            </p>
+            {isAdmin && stock.id !== me?.uid && photoOf(stock.id) && (
+              <button type="button" className="link danger small" onClick={removePhoto}>Remove photo (admin)</button>
+            )}
+            {photoError && <p className="error small" role="alert">{photoError}</p>}
+          </div>
         </div>
         <dl className="facts small">
           <dt>Week open / high / low</dt>
@@ -80,6 +101,13 @@ function StockView() {
         <TradePanel stock={stock} />
       </div>
 
+      {stock.id === me?.uid && stock.listed && (
+        <section className="card">
+          <h2>Your photo</h2>
+          <PhotoEditor />
+        </section>
+      )}
+
       <section className="card">
         <h2>Holders</h2>
         {holders.length === 0 ? (
@@ -88,7 +116,8 @@ function StockView() {
           <ul className="plain">
             {holders.map((h) => (
               <li key={h.uid} className="row between">
-                <span>
+                <span className="with-avatar">
+                  <Avatar uid={h.uid} name={playerById.get(h.uid)?.displayName ?? "?"} size={24} />
                   {playerById.get(h.uid)?.displayName ?? "Unknown"}
                   {h.uid === me?.uid && " (you)"}
                 </span>

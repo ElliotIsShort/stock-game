@@ -141,6 +141,13 @@ export interface Post {
   createdAt: number;
 }
 
+/** Stored at photos/{uid}. Kept out of stocks/{uid} so price updates don't resend image data. */
+export interface StockPhoto {
+  uid: string;
+  dataUrl: string;
+  updatedAt: number;
+}
+
 export type RegistrationStatus = "pending" | "approved" | "rejected";
 
 export interface Registration {

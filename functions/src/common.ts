@@ -21,6 +21,7 @@ export const refs = {
   holding: (uid: string, stockId: string) => db.doc(`holdings/${uid}_${stockId}`) as DocumentReference<Holding>,
   registration: (uid: string) => db.doc(`registrations/${uid}`),
   admin: (uid: string) => db.doc(`admins/${uid}`),
+  photo: (uid: string) => db.doc(`photos/${uid}`),
   report: (week: number) => db.doc(`weeklyReports/week-${String(week).padStart(4, "0")}`),
 };
 

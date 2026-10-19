@@ -8,6 +8,7 @@ import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
+import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
 import { PostComposer } from "./PostComposer";
 
@@ -120,6 +121,7 @@ function PostItem({ post }: { post: Post }) {
   return (
     <article className={`item post${post.system ? " system" : ""}`}>
       <div className="item-head">
+        {!post.system && <Avatar uid={post.authorId} name={post.authorName} size={24} />}
         <strong>{post.authorName}</strong>
         {post.taggedStockId && post.taggedName && !post.system && (
           <span className="muted">

@@ -4,3 +4,5 @@ export { register, approvePlayer, rejectPlayer } from "./approval";
 export { trade } from "./trading";
 export { createPost, toggleReaction, deletePost } from "./social";
 export { touch, updateConfig, delistPlayer, runWeeklyClose, weeklyCloseCron } from "./adminOps";
+export { setStockPhoto } from "./photo";
+export { resetGame } from "./reset";

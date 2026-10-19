@@ -10,13 +10,17 @@
   "scripts": {
     "build": "npm run build -w functions && npm run build -w web",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w functions && npm run typecheck -w web",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "vitest run --config vitest.unit.config.mts",
+    "test:integration": "node scripts/ensure-test-secret.mjs && npm run build -w functions && firebase emulators:exec --project demo-fsm --only auth,firestore,functions \"vitest run --config vitest.integration.config.mts\"",
     "dev:web": "npm run dev -w web",
-    "emulators": "npm run build -w functions && firebase emulators:start",
-    "deploy:backend": "npm run build -w functions && firebase deploy --only functions,firestore"
+    "emulators": "npm run build -w functions && firebase emulators:start --project demo-fsm",
+    "deploy:backend": "npm test && firebase deploy --only functions,firestore"
   },
   "devDependencies": {
     "@types/node": "22.20.4",
     "firebase-tools": "15.32.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
   }
 }

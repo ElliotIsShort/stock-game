@@ -14,6 +14,7 @@ import {
   type Player,
   type Registration,
   type Stock,
+  type StockPhoto,
 } from "@fsm/shared";
 import { fb, firebaseConfigured } from "@/lib/firebase";
 import { useDoc, useQuery } from "@/lib/hooks";
@@ -44,6 +45,8 @@ interface GameContextValue {
   playerById: Map<string, PlayerView>;
   holdings: Holding[];
   myHoldings: Holding[];
+  /** Stock photo data URL by uid, if they've set one. */
+  photoOf: (uid: string) => string | undefined;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -83,6 +86,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const stocksQ = useQuery<Stock>(liveDb ? collection(liveDb, "stocks") : null, [on]);
   const playersQ = useQuery<Player>(liveDb ? collection(liveDb, "players") : null, [on]);
   const holdingsQ = useQuery<Holding>(liveDb ? collection(liveDb, "holdings") : null, [on]);
+  const photosQ = useQuery<StockPhoto>(liveDb ? collection(liveDb, "photos") : null, [on]);
   const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, "meta", "state") : null, [on]);
   const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, "config", "global") : null, [on]);
 
@@ -97,6 +101,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<GameContextValue>(() => {
     const stocks = stocksQ.data;
+    const photoById = new Map(photosQ.data.map((p) => [p.uid, p.dataUrl]));
     const stockById = new Map(stocks.map((s) => [s.id, s]));
     const priceOf = (id: string) => {
       const s = stockById.get(id);
@@ -135,8 +140,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       playerById: new Map(players.map((p) => [p.uid, p])),
       holdings: holdingsQ.data,
       myHoldings: uid ? (byUid.get(uid) ?? []) : [],
+      photoOf: (id: string) => photoById.get(id),
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

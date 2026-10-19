@@ -1,6 +1,7 @@
 "use client";
 
 import { weeklyGrowth } from "@fsm/shared";
+import { Avatar } from "@/components/Avatar";
 import { useGame } from "@/components/GameProvider";
 import { changeClass, gbp, pct } from "@/lib/format";
 
@@ -41,8 +42,13 @@ export default function LeaderboardPage() {
                 <tr key={p.uid} className={`${p.isIdle ? "idle" : ""} ${p.uid === me?.uid ? "me-row" : ""}`}>
                   <td>{p.isIdle ? "—" : i + 1}</td>
                   <th scope="row">
-                    {p.displayName}
-                    {p.isIdle && <span className="small"> (idle)</span>}
+                    <span className="with-avatar">
+                      <Avatar uid={p.uid} name={p.displayName} />
+                      <span>
+                        {p.displayName}
+                        {p.isIdle && <span className="small"> (idle)</span>}
+                      </span>
+                    </span>
                   </th>
                   <td className="num">{p.score.toFixed(3)}</td>
                   <td className="num">{gbp(p.netWorth)}</td>

@@ -20,6 +20,7 @@ export default function AdminPage() {
       <ConfigEditor />
       <Delist />
       <AuditLog />
+      <ResetGame />
     </div>
   );
 }
@@ -243,6 +244,45 @@ function AuditLog() {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+function ResetGame() {
+  const [typed, setTyped] = useState("");
+  const { busy, run, view } = useAction();
+  const ready = typed === "RESET";
+  return (
+    <section className="card danger-zone">
+      <h2>Reset the game</h2>
+      <p className="muted small">
+        Puts the market back to day one: deletes every player, stock, holding, trade, post, photo and weekly report, and restarts at
+        week 1 with an empty prize pool. Sign-in accounts, admins, settings and this audit log are kept. Everyone who was playing goes
+        back to <strong>Pending sign-ups</strong> above, so you just re-approve them and they start fresh with founder cash.
+      </p>
+      <form
+        className="row wrap"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!ready || !window.confirm("Really wipe all game data? This can't be undone.")) return;
+          run(async () => {
+            const res = await api.resetGame(typed);
+            setTyped("");
+            const total = Object.values(res.deleted).reduce((a, b) => a + b, 0);
+            return `Reset done. Deleted ${total} document(s); ${res.requeued} player(s) are waiting for re-approval.`;
+          });
+        }}
+      >
+        <label className="inline">
+          Type RESET to confirm{" "}
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" aria-describedby="reset-help" />
+        </label>
+        <button type="submit" className="danger" disabled={busy || !ready}>
+          {busy ? "Resetting…" : "Reset everything"}
+        </button>
+      </form>
+      <p id="reset-help" className="muted small">Avoid running this while people are trading.</p>
+      {view}
     </section>
   );
 }

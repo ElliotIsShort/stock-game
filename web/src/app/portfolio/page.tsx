@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import type { Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
+import { PhotoEditor } from "@/components/PhotoEditor";
 import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
@@ -70,6 +71,7 @@ export default function PortfolioPage() {
       {myStock && (
         <section className="card">
           <h2>Your stock</h2>
+          {myStock.listed && <PhotoEditor />}
           <p>
             <Link href={stockHref(myStock.id)}>{myStock.displayName}</Link> trades at {gbp(myStock.price)}. Others hold{" "}
             {shares(heldByOthers)} shares ({gbp(heldByOthers * myStock.price)}), which earns you a CEO bonus of about{" "}

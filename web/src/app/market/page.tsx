@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { median } from "@fsm/shared";
+import { Avatar } from "@/components/Avatar";
 import { useGame } from "@/components/GameProvider";
 import { changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
 
@@ -60,9 +61,14 @@ export default function MarketPage() {
             {rows.map(({ s, change, held, idle }) => (
               <tr key={s.id} className={idle ? "idle" : undefined}>
                 <th scope="row">
-                  <Link href={stockHref(s.id)}>{s.displayName}</Link>
-                  {s.id === me?.uid && <span className="muted small"> (you)</span>}
-                  {idle && <span className="muted small"> · idle</span>}
+                  <span className="with-avatar">
+                    <Avatar uid={s.id} name={s.displayName} />
+                    <span>
+                      <Link href={stockHref(s.id)}>{s.displayName}</Link>
+                      {s.id === me?.uid && <span className="muted small"> (you)</span>}
+                      {idle && <span className="muted small"> · idle</span>}
+                    </span>
+                  </span>
                 </th>
                 <td className="num">{gbp(s.price)}</td>
                 <td className={`num ${changeClass(change)}`}>{pct(change)}</td>

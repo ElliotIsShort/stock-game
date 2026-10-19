@@ -17,6 +17,9 @@ export const api = {
   trade: (req: { stockId: string; side: TradeSide; amount: number; postText?: string }) => call<typeof req, Trade>("trade", req),
   createPost: (req: { text: string; taggedStockId?: string | null; linkedTradeId?: string | null }) => call<typeof req, Post>("createPost", req),
   toggleReaction: (postId: string, reaction: ReactionType) => call("toggleReaction", { postId, reaction }),
+  /** Set your own stock photo (data URL), or pass null to remove. Admins can pass another uid to remove theirs. */
+  setStockPhoto: (photo: string | null, uid?: string) =>
+    call<{ photo: string | null; uid?: string }, { ok: true; hasPhoto: boolean }>("setStockPhoto", uid ? { photo, uid } : { photo }),
   // Admin
   approvePlayer: (uid: string) => call<{ uid: string }, { startingCash: number; listingPrice: number }>("approvePlayer", { uid }),
   rejectPlayer: (uid: string) => call("rejectPlayer", { uid }),
@@ -28,6 +31,8 @@ export const api = {
       "runWeeklyClose",
       { expectedWeek },
     ),
+  resetGame: (confirm: string) =>
+    call<{ confirm: string }, { deleted: Record<string, number>; requeued: number; declined: number }>("resetGame", { confirm }),
 };
 
 export function errorMessage(err: unknown): string {

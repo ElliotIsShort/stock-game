@@ -50,7 +50,7 @@ export function PostComposer({
       <label className="sr-only" htmlFor={`post-${linkedTradeId ?? defaultTag ?? "main"}`}>Post</label>
       <textarea
         id={`post-${linkedTradeId ?? defaultTag ?? "main"}`}
-        placeholder={linkedTradeId ? "Why did you make this trade?" : "Spill the tea… (true or not — that's the game)"}
+        placeholder={linkedTradeId ? "Why did you make this trade?" : "Post your thoughts"}
         maxLength={config.maxPostLength}
         rows={compact ? 2 : 3}
         value={text}

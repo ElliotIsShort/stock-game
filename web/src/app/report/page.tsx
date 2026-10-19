@@ -44,7 +44,7 @@ function ReportView() {
       <div className="row between wrap">
         <h1>Week {r.week} report</h1>
         <div className="row">
-          <button type="button" onClick={() => copy("markdown")}>{copied === "markdown" ? "Copied" : "Copy for AI (Markdown)"}</button>
+          <button type="button" onClick={() => copy("markdown")}>{copied === "markdown" ? "Copied" : "Markdown"}</button>
           <button type="button" onClick={() => copy("json")}>{copied === "json" ? "Copied" : "Copy JSON"}</button>
         </div>
       </div>

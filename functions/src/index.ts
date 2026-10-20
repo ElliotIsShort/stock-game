@@ -8,3 +8,4 @@ export { setStockPhoto } from "./photo";
 export { resetGame } from "./reset";
 export { updateContent } from "./content";
 export { renamePlayer } from "./rename";
+export { openShort, closeShort } from "./shorts";

@@ -7,3 +7,4 @@ export * from "./photo";
 export * from "./positions";
 export * from "./bankruptcy";
 export * from "./content";
+export * from "./shorts";

@@ -133,6 +133,9 @@ tr.me-row { background: rgba(88, 166, 255, .08); }
 .badge { font-size: .7rem; font-weight: 700; padding: .1rem .4rem; border-radius: 4px; }
 .badge.buy { background: rgba(63, 185, 80, .2); color: var(--up); }
 .badge.sell { background: rgba(248, 81, 73, .2); color: var(--down); }
+.badge.short { background: rgba(210, 153, 34, .2); color: var(--warn); }
+.short-panel { display: flex; flex-direction: column; gap: .75rem; }
+.short-panel h3 { margin: 0; color: var(--muted); }
 .linked { color: var(--muted); border-left: 3px solid var(--accent); padding-left: .5rem; }
 .post-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .reactions { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }

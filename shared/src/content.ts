@@ -48,6 +48,11 @@ export const DEFAULT_CHANGELOG = `# Change log
 
 What's new in Stonker. Newest first.
 
+## Short selling
+- You can now bet against a stock. Open a short to sell shares you don't own; if the price falls you buy them back cheaper and keep the difference. You profit when a stock drops.
+- You can short up to half your capital, and there's a small weekly fee while a short stays open. Close whenever you like.
+- A short's profit only counts toward the leaderboard once you close it.
+
 ## Getting started
 - The game is live: trading, the feed, posts and reactions, weekly close, the leaderboard and weekly reports.
 - Add a photo to your stock from your Portfolio or stock page.

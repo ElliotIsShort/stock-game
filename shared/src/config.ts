@@ -16,6 +16,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   minHoursBetweenAutoCloses: 144,
   maxPostLength: 500,
   postCooldownSeconds: 10,
+  maxShortExposurePct: 0.5,
+  shortBorrowFeePct: 0.02,
 };
 
 interface Bound {
@@ -42,6 +44,8 @@ export const CONFIG_BOUNDS: Record<keyof GameConfig, Bound> = {
   minHoursBetweenAutoCloses: { min: 0, max: 1000, label: "Min hours between automatic closes", help: "Cron-triggered closes are skipped inside this window" },
   maxPostLength: { min: 10, max: 5000, integer: true, label: "Max post length", help: "Characters" },
   postCooldownSeconds: { min: 0, max: 3600, integer: true, label: "Post cooldown (seconds)", help: "Minimum seconds between a player's posts; 0 disables it" },
+  maxShortExposurePct: { min: 0, max: 5, label: "Max short exposure (fraction of capital)", help: "0.5 = you can short up to half your capital" },
+  shortBorrowFeePct: { min: 0, max: 0.5, label: "Weekly short borrow fee (fraction)", help: "0.02 = 2% of each open short's value per week" },
 };
 
 export function mergeConfig(stored: Partial<GameConfig> | undefined | null): GameConfig {

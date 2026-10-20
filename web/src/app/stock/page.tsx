@@ -9,6 +9,7 @@ import { Feed } from "@/components/Feed";
 import { PostComposer } from "@/components/PostComposer";
 import { PriceChart } from "@/components/PriceChart";
 import { TradePanel } from "@/components/TradePanel";
+import { ShortPanel } from "@/components/ShortPanel";
 import { Avatar } from "@/components/Avatar";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { api, errorMessage } from "@/lib/api";
@@ -100,6 +101,8 @@ function StockView() {
         </div>
         <TradePanel stock={stock} />
       </div>
+
+      {stock.listed && stock.ownerId !== me?.uid && <ShortPanel stock={stock} />}
 
       {stock.id === me?.uid && stock.listed && (
         <section className="card">

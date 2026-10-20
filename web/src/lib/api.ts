@@ -1,7 +1,7 @@
 "use client";
 
 import { httpsCallable } from "firebase/functions";
-import type { GameConfig, Post, ReactionType, Trade, TradeSide } from "@fsm/shared";
+import type { GameConfig, Post, ReactionType, Short, Trade, TradeSide } from "@fsm/shared";
 import { fb } from "./firebase";
 
 async function call<Req, Res>(name: string, data: Req): Promise<Res> {
@@ -36,6 +36,8 @@ export const api = {
   updateContent: (patch: { rules?: string; changelog?: string }) => call<typeof patch, { ok: true }>("updateContent", patch),
   renamePlayer: (uid: string, displayName: string) =>
     call<{ uid: string; displayName: string }, { ok: true; from: string; to: string }>("renamePlayer", { uid, displayName }),
+  openShort: (req: { stockId: string; shares: number; postText?: string }) => call<typeof req, Short>("openShort", req),
+  closeShort: (req: { shortId: string; postText?: string }) => call<typeof req, Short>("closeShort", req),
 };
 
 export function errorMessage(err: unknown): string {

@@ -71,13 +71,17 @@ function TradeItem({ trade }: { trade: Trade }) {
   const [annotating, setAnnotating] = useState(false);
   const move = trade.priceAfter / trade.priceBefore - 1;
   const mine = me?.uid === trade.traderId;
+  const isShort = trade.kind === "openShort" || trade.kind === "closeShort";
+  const badge = trade.kind === "openShort" ? "SHORT" : trade.kind === "closeShort" ? "COVER" : trade.side === "buy" ? "BUY" : "SELL";
+  const verb =
+    trade.kind === "openShort" ? "opened a short on" : trade.kind === "closeShort" ? "closed a short on" : trade.side === "buy" ? "bought" : "sold";
   return (
     <article className="item trade">
       <div className="item-head">
-        <span className={`badge ${trade.side}`}>{trade.side === "buy" ? "BUY" : "SELL"}</span>
+        <span className={`badge ${isShort ? "short" : trade.side}`}>{badge}</span>
         <span>
-          <strong>{trade.traderName}</strong> {trade.side === "buy" ? "bought" : "sold"} {shares(trade.shares)} shares of{" "}
-          <Link href={stockHref(trade.stockId)}>{trade.stockName}</Link> for {gbp(trade.cashAmount)}
+          <strong>{trade.traderName}</strong> {verb} {shares(trade.shares)} shares of{" "}
+          <Link href={stockHref(trade.stockId)}>{trade.stockName}</Link>{trade.kind === "openShort" ? "" : ` for ${gbp(trade.cashAmount)}`}
         </span>
         <time className="muted small" dateTime={new Date(trade.createdAt).toISOString()}>{ago(trade.createdAt)}</time>
       </div>

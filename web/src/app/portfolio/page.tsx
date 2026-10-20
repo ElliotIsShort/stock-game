@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
 import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
-import { positionFromTrades, type NetWorthHistory, type Trade } from "@fsm/shared";
+import { positionFromTrades, quoteCloseShort, shortUnrealised, type NetWorthHistory, type Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { LineChart } from "@/components/LineChart";
@@ -12,7 +12,7 @@ import { useDoc, useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
 
 export default function PortfolioPage() {
-  const { me, playerById, myHoldings, stockById, holdings, config } = useGame();
+  const { me, playerById, myHoldings, myShorts, stockById, holdings, config } = useGame();
   const uid = me?.uid ?? null;
   // All of my trades, oldest-first cost basis needs the full history (not just recent).
   const myTrades = useQuery<Trade>(
@@ -103,6 +103,46 @@ export default function PortfolioPage() {
           </div>
         )}
       </section>
+
+      {myShorts.length > 0 && (
+        <section className="card">
+          <h2>Open shorts</h2>
+          <p className="small muted">A short&apos;s profit only counts toward the leaderboard once you close it.</p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Stock</th>
+                  <th scope="col" className="num">Shares</th>
+                  <th scope="col" className="num">Opened at</th>
+                  <th scope="col" className="num">Price now</th>
+                  <th scope="col" className="num">P/L if closed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {myShorts.map((s) => {
+                  const stock = stockById.get(s.stockId);
+                  let live = 0;
+                  try {
+                    if (stock) live = shortUnrealised(s, quoteCloseShort(stock, s.shares, config.tradingFeePct).cost);
+                  } catch {
+                    live = 0;
+                  }
+                  return (
+                    <tr key={s.id}>
+                      <th scope="row"><Link href={stockHref(s.stockId)}>{s.stockName}</Link></th>
+                      <td className="num">{shares(s.shares)}</td>
+                      <td className="num">{gbp(s.openPrice)}</td>
+                      <td className="num">{gbp(stock?.price)}</td>
+                      <td className={`num ${changeClass(live)}`}>{live >= 0 ? "+" : ""}{gbp(live)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {myStock && (
         <section className="card">

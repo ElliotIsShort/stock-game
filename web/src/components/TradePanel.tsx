@@ -114,7 +114,7 @@ export function TradePanel({ stock }: { stock: Stock }) {
       {tooMuch && <p className="error small" role="alert">{side === "buy" ? "Not enough cash." : "You don't hold that many shares."}</p>}
       <label>
         Add a post (optional)
-        <textarea rows={2} maxLength={config.maxPostLength} value={postText} onChange={(e) => setPostText(e.target.value)} placeholder="Why? e.g. They're getting divorced" />
+        <textarea rows={2} maxLength={config.maxPostLength} value={postText} onChange={(e) => setPostText(e.target.value)} placeholder="Why? e.g. they're getting divorced" />
       </label>
       <button type="submit" className={`primary ${side}`} disabled={busy || !quote || tooMuch}>
         {busy ? "Placing…" : side === "buy" ? `Buy ${stock.displayName}` : `Sell ${stock.displayName}`}

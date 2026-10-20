@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { collection, doc } from "firebase/firestore";
+import { collection, doc, query, where } from "firebase/firestore";
 import {
   DEFAULT_CONFIG,
   leaderboardScore,
@@ -13,6 +13,7 @@ import {
   type Holding,
   type Player,
   type Registration,
+  type Short,
   type Stock,
   type StockPhoto,
 } from "@fsm/shared";
@@ -45,6 +46,8 @@ interface GameContextValue {
   playerById: Map<string, PlayerView>;
   holdings: Holding[];
   myHoldings: Holding[];
+  /** The signed-in player's open short positions. */
+  myShorts: Short[];
   /** Stock photo data URL by uid, if they've set one. */
   photoOf: (uid: string) => string | undefined;
 }
@@ -87,6 +90,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const playersQ = useQuery<Player>(liveDb ? collection(liveDb, "players") : null, [on]);
   const holdingsQ = useQuery<Holding>(liveDb ? collection(liveDb, "holdings") : null, [on]);
   const photosQ = useQuery<StockPhoto>(liveDb ? collection(liveDb, "photos") : null, [on]);
+  const myShortsQ = useQuery<Short>(
+    liveDb && uid ? query(collection(liveDb, "shorts"), where("ownerId", "==", uid), where("status", "==", "open")) : null,
+    [on, uid],
+  );
   const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, "meta", "state") : null, [on]);
   const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, "config", "global") : null, [on]);
 
@@ -140,9 +147,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       playerById: new Map(players.map((p) => [p.uid, p])),
       holdings: holdingsQ.data,
       myHoldings: uid ? (byUid.get(uid) ?? []) : [],
+      myShorts: myShortsQ.data,
       photoOf: (id: string) => photoById.get(id),
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, myShortsQ.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

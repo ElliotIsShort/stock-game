@@ -32,6 +32,10 @@ export interface GameConfig {
   maxPostLength: number;
   /** Minimum seconds between a player's standalone posts. 0 disables the cooldown. */
   postCooldownSeconds: number;
+  /** Max total short exposure (value of open shorts) as a fraction of a player's capital. */
+  maxShortExposurePct: number;
+  /** Weekly borrow fee on the value of each open short, charged at weekly close into the prize pool. */
+  shortBorrowFeePct: number;
 }
 
 export interface GameState {
@@ -99,6 +103,39 @@ export interface Holding {
 
 export type TradeSide = "buy" | "sell";
 
+export type ShortStatus = "open" | "closed";
+
+/**
+ * A synthetic short position (stored at shorts/{id}). Opening sells `shares`
+ * into the pool for `openProceeds` (net of fee); closing buys them back. No
+ * share inventory is borrowed — it's purely the AMM, so price impact and fees
+ * fall on the short-seller exactly like a sell then a buy.
+ */
+export interface Short {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  stockId: string;
+  stockName: string;
+  shares: number;
+  status: ShortStatus;
+  /** Price when opened, and cash received (net of the opening fee). */
+  openPrice: number;
+  openProceeds: number;
+  openedAt: number;
+  openWeek: number;
+  /** Σ weekly borrow fees charged while open. */
+  borrowFeesPaid: number;
+  /** Set when closed. */
+  closePrice?: number;
+  /** Cash paid to buy the shares back (incl. the closing fee). */
+  closeCost?: number;
+  /** openProceeds − closeCost − borrowFeesPaid. */
+  realisedPnl?: number;
+  closedAt?: number;
+  closeWeek?: number;
+}
+
 export interface Trade {
   id: string;
   traderId: string;
@@ -117,6 +154,8 @@ export interface Trade {
   week: number;
   createdAt: number;
   linkedPostId?: string | null;
+  /** Present when this trade opened or closed a short, so the feed can label it. */
+  kind?: "openShort" | "closeShort";
 }
 
 export type ReactionType = "like" | "laugh" | "wow" | "down";

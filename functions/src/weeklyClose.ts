@@ -4,6 +4,7 @@ import {
   ceoBonus,
   isIdleSince,
   leaderboardScore,
+  shortBorrowFee,
   mean,
   mechanicsExplainer,
   median,
@@ -19,6 +20,7 @@ import {
   type PlayerSnapshot,
   type Post,
   type ReportFlag,
+  type Short,
   type Stock,
   type StockWeekStats,
   type Trade,
@@ -65,11 +67,13 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     }
 
     const world = await readWorld(tx);
-    const [tradesSnap, postsSnap, prevSnap] = await Promise.all([
+    const [tradesSnap, postsSnap, prevSnap, openShortsSnap] = await Promise.all([
       tx.get(db.collection("trades").where("week", "==", week)),
       tx.get(db.collection("posts").where("week", "==", week)),
       tx.get(refs.report(week - 1)),
+      tx.get(db.collection("shorts").where("status", "==", "open")),
     ]);
+    const openShorts = openShortsSnap.docs.map((d) => d.data() as Short);
     // Existing net-worth history, so this week's point can be appended.
     const activePlayerIds = world.players.filter((p) => p.isActive).map((p) => p.uid);
     const historySnaps = await Promise.all(activePlayerIds.map((uid) => tx.get(refs.netWorthHistory(uid))));
@@ -132,6 +136,23 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       }
     }
     const bonusesPaid = [...bonusOf.values()].reduce((a, b) => a + b, 0);
+
+    // ---------- 3b. Short borrow fees ----------
+    // Each open short pays a weekly fee on its current value into the prize pool.
+    // Charged to the owner's cash (even if idle/deactivated: the position is live).
+    let borrowFeesCollected = 0;
+    const borrowFeeWrites: { shortId: string; total: number }[] = [];
+    for (const short of openShorts) {
+      const stock = stocks.get(short.stockId);
+      if (!stock) continue;
+      const fee = shortBorrowFee(short.shares, stock.price, cfg.shortBorrowFeePct);
+      if (fee <= 0) continue;
+      const owner = players.get(short.ownerId);
+      if (owner) owner.cash -= fee;
+      else tx.update(refs.player(short.ownerId), { cash: FieldValue.increment(-fee) });
+      borrowFeesCollected += fee;
+      borrowFeeWrites.push({ shortId: short.id, total: short.borrowFeesPaid + fee });
+    }
 
     // ---------- 4. Top up pool depth (§2.1) ----------
     const avgNetWorth = mean(earning().map(worthOf)) ?? cfg.baseStartingCash;
@@ -344,13 +365,15 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
         weekTradeCount: 0,
       });
     }
+    // Borrow fees collected this close seed next week's prize pool.
     tx.set(refs.state(), {
       currentWeek: week + 1,
-      prizePool: state.prizePool - prizePaid,
+      prizePool: state.prizePool - prizePaid + borrowFeesCollected,
       weekFees: 0,
       weekStartedAt: now,
       lastCloseAt: now,
     });
+    for (const w of borrowFeeWrites) tx.update(refs.short(w.shortId), { borrowFeesPaid: w.total });
     tx.set(reportRef, report);
 
     const postRef = db.collection("posts").doc();

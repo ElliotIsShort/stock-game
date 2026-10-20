@@ -7,6 +7,7 @@ import {
   mechanicsExplainer,
   median,
   netWorth,
+  NET_WORTH_HISTORY_MAX,
   reportToMarkdown,
   targetPoolCash,
   topUpPool,
@@ -68,6 +69,10 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       tx.get(db.collection("posts").where("week", "==", week)),
       tx.get(refs.report(week - 1)),
     ]);
+    // Existing net-worth history, so this week's point can be appended.
+    const activePlayerIds = world.players.filter((p) => p.isActive).map((p) => p.uid);
+    const historySnaps = await Promise.all(activePlayerIds.map((uid) => tx.get(refs.netWorthHistory(uid))));
+    const historyOf = new Map(activePlayerIds.map((uid, i) => [uid, historySnaps[i].data()?.points ?? []]));
     const trades = tradesSnap.docs.map((d) => d.data() as Trade);
     const posts = postsSnap.docs.map((d) => d.data() as Post).filter((p) => !p.system);
     const prevReport = prevSnap.exists ? (prevSnap.data() as WeeklyReport) : null;
@@ -306,14 +311,18 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
 
     // ---------- Writes ----------
     for (const p of players.values()) {
+      const endWorth = worthOf(p);
       tx.update(refs.player(p.uid), {
         cash: p.cash,
         isIdle: p.isIdle,
         totalAllowances: p.totalAllowances,
         totalBonus: p.totalBonus,
         // Next week's baseline includes this week's payouts and prize.
-        netWorthWeekStart: worthOf(p),
+        netWorthWeekStart: endWorth,
       });
+      // Append this week's net-worth sample, keeping the most recent N.
+      const points = [...(historyOf.get(p.uid) ?? []), { week, t: now, v: endWorth }].slice(-NET_WORTH_HISTORY_MAX);
+      tx.set(refs.netWorthHistory(p.uid), { uid: p.uid, points });
     }
     for (const s of stocks.values()) {
       tx.update(refs.stock(s.id), {

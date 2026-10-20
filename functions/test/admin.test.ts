@@ -78,7 +78,7 @@ describe("full reset", () => {
     expect(res.declined).toBe(1); // Cara was delisted
     expect(res.deleted.players).toBe(3);
 
-    for (const c of ["players", "stocks", "holdings", "trades", "posts", "photos", "weeklyReports"]) {
+    for (const c of ["players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "weeklyReports"]) {
       expect(await listDocs(c), c).toEqual([]);
     }
     expect(await getDoc("meta/state")).toMatchObject({ currentWeek: 1, prizePool: 0, weekFees: 0, lastCloseAt: null });

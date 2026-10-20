@@ -2,7 +2,7 @@ import { initializeApp } from "firebase-admin/app";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { getFirestore, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
-import { mergeConfig, type GameConfig, type GameState, type Holding, type Player, type Stock } from "@fsm/shared";
+import { mergeConfig, type GameConfig, type GameState, type Holding, type NetWorthHistory, type Player, type Stock } from "@fsm/shared";
 
 /** Change to the region closest to your players (also update web/.env). */
 export const REGION = "europe-west2";
@@ -22,6 +22,7 @@ export const refs = {
   registration: (uid: string) => db.doc(`registrations/${uid}`),
   admin: (uid: string) => db.doc(`admins/${uid}`),
   photo: (uid: string) => db.doc(`photos/${uid}`),
+  netWorthHistory: (uid: string) => db.doc(`netWorthHistory/${uid}`) as DocumentReference<NetWorthHistory>,
   report: (week: number) => db.doc(`weeklyReports/week-${String(week).padStart(4, "0")}`),
 };
 

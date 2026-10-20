@@ -38,6 +38,12 @@ describe("weekly close (§6)", () => {
     const state = await getDoc("meta/state");
     expect(state).toMatchObject({ currentWeek: 2, prizePool: 0, weekFees: 0 });
 
+    // Net-worth history gets one point per close, matching the new week-start baseline.
+    const hist = await getDoc(`netWorthHistory/${bob.uid}`);
+    expect(hist.points).toHaveLength(1);
+    expect(hist.points[0]).toMatchObject({ week: 1 });
+    expect(hist.points[0].v).toBeCloseTo(b.netWorthWeekStart, 6);
+
     const report = await getDoc("weeklyReports/week-0001");
     expect(report.activity.tradeCount).toBe(1);
     expect(report.money.allowancesPaid).toBe(2 * weeklyAllowance);

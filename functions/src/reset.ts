@@ -6,7 +6,7 @@ import { asObject, auditEntry, auditRef, db, initialState, refs, requireAdmin } 
 export const RESET_CONFIRMATION = "RESET";
 
 /** Game data wiped by a reset. Players go first so trades/posts stop being accepted straight away. */
-const WIPED_COLLECTIONS = ["players", "stocks", "holdings", "trades", "posts", "photos", "weeklyReports"] as const;
+const WIPED_COLLECTIONS = ["players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "weeklyReports"] as const;
 
 /**
  * Admin: reset the market back to day one.

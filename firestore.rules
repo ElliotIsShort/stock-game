@@ -29,6 +29,7 @@ service cloud.firestore {
     match /weeklyReports/{id}  { allow read: if member(); allow write: if false; }
     match /meta/{id}           { allow read: if member(); allow write: if false; }
     match /photos/{id}         { allow read: if member(); allow write: if false; }
+    match /netWorthHistory/{id} { allow read: if member(); allow write: if false; }
     match /config/{id}         { allow read: if signedIn(); allow write: if false; }
 
     match /registrations/{uid} {

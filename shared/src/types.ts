@@ -145,6 +145,26 @@ export interface Post {
   createdAt: number;
 }
 
+/** A single net-worth sample. */
+export interface NetWorthPoint {
+  /** Week number this sample is the close of. */
+  week: number;
+  /** Epoch ms when recorded. */
+  t: number;
+  /** Net worth at that moment. */
+  v: number;
+}
+
+/**
+ * Stored at netWorthHistory/{uid}. One point appended per weekly close, so a
+ * player's net worth can be charted over time. Kept out of the player doc so
+ * live reads stay small; capped to the most recent NET_WORTH_HISTORY_MAX points.
+ */
+export interface NetWorthHistory {
+  uid: string;
+  points: NetWorthPoint[];
+}
+
 /** Stored at photos/{uid}. Kept out of stocks/{uid} so price updates don't resend image data. */
 export interface StockPhoto {
   uid: string;

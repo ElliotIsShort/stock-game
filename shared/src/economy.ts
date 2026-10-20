@@ -56,6 +56,9 @@ export function isIdleSince(lastActiveAt: number, now: number, idleThresholdWeek
 }
 
 /** Tiny amounts left over from float math are treated as zero. */
+/** Keep roughly two years of weekly net-worth samples per player. */
+export const NET_WORTH_HISTORY_MAX = 104;
+
 export const SHARE_EPSILON = 1e-9;
 export const CASH_EPSILON = 1e-6;
 

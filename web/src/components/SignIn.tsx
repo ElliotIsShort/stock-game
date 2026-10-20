@@ -42,7 +42,7 @@ export function SignIn() {
 
   return (
     <div className="card narrow">
-      <h1>Friend Stock Market</h1>
+      <h1>Stonker</h1>
       <p className="muted">Everyone&apos;s a stock. Trade your friends with play money.</p>
       <form onSubmit={submit} className="stack">
         <label>

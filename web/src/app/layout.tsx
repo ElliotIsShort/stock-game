@@ -5,7 +5,7 @@ import { Shell } from "@/components/Shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Friend Stock Market",
+  title: "Stonker",
   description: "Trade your friends with play money.",
 };
 

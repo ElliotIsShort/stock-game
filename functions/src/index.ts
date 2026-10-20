@@ -6,3 +6,5 @@ export { createPost, toggleReaction, deletePost } from "./social";
 export { touch, updateConfig, delistPlayer, runWeeklyClose, weeklyCloseCron } from "./adminOps";
 export { setStockPhoto } from "./photo";
 export { resetGame } from "./reset";
+export { updateContent } from "./content";
+export { renamePlayer } from "./rename";

@@ -5,3 +5,5 @@ export * from "./economy";
 export * from "./report";
 export * from "./photo";
 export * from "./positions";
+export * from "./bankruptcy";
+export * from "./content";

@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
-import { CONFIG_BOUNDS, type AuditEntry, type GameConfig, type Registration } from "@fsm/shared";
+import { doc } from "firebase/firestore";
+import { CONFIG_BOUNDS, DEFAULT_CHANGELOG, DEFAULT_RULES, type AuditEntry, type GameConfig, type Registration, type SiteContent } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { fb } from "@/lib/firebase";
-import { useQuery } from "@/lib/hooks";
+import { useDoc, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
 import { ago, gbp } from "@/lib/format";
 
@@ -16,12 +17,114 @@ export default function AdminPage() {
     <div className="stack">
       <h1>Admin</h1>
       <Approvals />
+      <Players />
       <WeeklyClose />
       <ConfigEditor />
+      <ContentEditor />
       <Delist />
       <AuditLog />
       <ResetGame />
     </div>
+  );
+}
+
+/** Player roster: last online, idle/bankrupt status, and rename. */
+function Players() {
+  const { players } = useGame();
+  const { busy, run, view } = useAction();
+  const roster = [...players].sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+
+  function rename(uid: string, current: string) {
+    const next = window.prompt(`New name for ${current}:`, current);
+    if (!next || next.trim() === current) return;
+    run(async () => {
+      const res = await api.renamePlayer(uid, next.trim());
+      return `Renamed ${res.from} to ${res.to}.`;
+    });
+  }
+
+  return (
+    <section className="card">
+      <h2>Players</h2>
+      {roster.length === 0 && <p className="muted">No players yet.</p>}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Player</th>
+              <th scope="col">Last online</th>
+              <th scope="col">Status</th>
+              <th scope="col"><span className="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {roster.map((p) => (
+              <tr key={p.uid} className={p.isIdle ? "idle" : undefined}>
+                <th scope="row">{p.displayName}</th>
+                <td title={new Date(p.lastActiveAt).toLocaleString("en-GB")}>{ago(p.lastActiveAt)}</td>
+                <td className="muted small">
+                  {!p.isActive ? "deactivated" : p.isIdle ? "idle" : "active"}
+                </td>
+                <td>
+                  <button type="button" className="link small" disabled={busy} onClick={() => rename(p.uid, p.displayName)}>Rename</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {view}
+    </section>
+  );
+}
+
+/** Edit the Rules and Change log pages shown to players. */
+function ContentEditor() {
+  const content = useDoc<SiteContent>(doc(fb().db, "content", "global"), []);
+  const [rules, setRules] = useState<string | null>(null);
+  const [changelog, setChangelog] = useState<string | null>(null);
+  const { busy, run, view } = useAction();
+
+  // Seed the editors once content loads (or fall back to the defaults).
+  useEffect(() => {
+    if (content.loading) return;
+    setRules((r) => (r === null ? content.data?.rules ?? DEFAULT_RULES : r));
+    setChangelog((c) => (c === null ? content.data?.changelog ?? DEFAULT_CHANGELOG : c));
+  }, [content.loading, content.data]);
+
+  return (
+    <section className="card">
+      <h2>Rules &amp; change log</h2>
+      <p className="muted small">
+        Shown on the Rules and Change log pages. Use <code># Heading</code>, <code>## Subheading</code> and <code>- bullet</code> lines.
+      </p>
+      <label>
+        Rules
+        <textarea rows={10} value={rules ?? ""} onChange={(e) => setRules(e.target.value)} />
+      </label>
+      <label>
+        Change log
+        <textarea rows={10} value={changelog ?? ""} onChange={(e) => setChangelog(e.target.value)} />
+      </label>
+      <button
+        type="button"
+        className="primary"
+        disabled={busy}
+        onClick={() =>
+          run(async () => {
+            const patch: { rules?: string; changelog?: string } = {};
+            if (rules !== null && rules !== (content.data?.rules ?? DEFAULT_RULES)) patch.rules = rules;
+            if (changelog !== null && changelog !== (content.data?.changelog ?? DEFAULT_CHANGELOG)) patch.changelog = changelog;
+            if (!patch.rules && !patch.changelog) return "No changes to save.";
+            await api.updateContent(patch);
+            return `Saved ${Object.keys(patch).join(" & ")}.`;
+          })
+        }
+      >
+        Save content
+      </button>
+      {view}
+    </section>
   );
 }
 

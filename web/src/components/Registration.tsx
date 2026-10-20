@@ -46,6 +46,7 @@ export function RegistrationGate() {
         <label>
           Display name
           <input required minLength={2} maxLength={30} value={name} onChange={(e) => setName(e.target.value)} />
+          <span className="muted small">Please use your real name (e.g. Joe Bloggs)</span>
         </label>
         {error && <p role="alert" className="error">{error}</p>}
         <button type="submit" className="primary" disabled={busy}>Request to join</button>

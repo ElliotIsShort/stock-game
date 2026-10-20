@@ -123,7 +123,7 @@ const gbp = (n: number) => `£${n.toLocaleString("en-GB", { minimumFractionDigit
 
 export function mechanicsExplainer(cfg: GameConfig): string {
   return [
-    "Friend Stock Market is a play-money game for a friend group. Every player is both a trader and a listed stock named after them.",
+    "Stonker is a play-money game for a friend group. Every player is both a trader and a listed stock named after them.",
     "Players trade each other's stock (never their own) against an automated market maker: each stock has a pool of cash C and shares S, price = C / S, and C × S stays constant during a trade. Buying adds cash to the pool and removes shares (price rises); selling does the reverse (price falls). Bigger trades move the price proportionally more. Fractional shares are allowed.",
     `Every trade pays a ${pct(cfg.tradingFeePct)} fee into a prize pool. At weekly close the whole prize pool goes to the player with the highest weekly growth, computed as (net worth at close − net worth at week start − that week's allowance) / net worth at week start.`,
     `Prices move only through trades. Posts and reactions in the feed never move prices directly; players decide whether a post is worth trading on, and stories may be made up.`,
@@ -144,7 +144,7 @@ function change(changes: Record<string, number | null>, key: string, fmt: (n: nu
 export function reportToMarkdown(r: Omit<WeeklyReport, "markdown">): string {
   const c = r.changes;
   const lines: string[] = [];
-  lines.push(`# Friend Stock Market — Week ${r.week} report`);
+  lines.push(`# Stonker — Week ${r.week} report`);
   lines.push(`Period: ${new Date(r.periodStart).toISOString()} → ${new Date(r.periodEnd).toISOString()} (trigger: ${r.trigger})`);
   lines.push("");
   lines.push("## How the game works");

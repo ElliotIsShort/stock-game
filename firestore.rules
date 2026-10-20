@@ -31,6 +31,7 @@ service cloud.firestore {
     match /photos/{id}         { allow read: if member(); allow write: if false; }
     match /netWorthHistory/{id} { allow read: if member(); allow write: if false; }
     match /config/{id}         { allow read: if signedIn(); allow write: if false; }
+    match /content/{id}        { allow read: if signedIn(); allow write: if false; }
 
     match /registrations/{uid} {
       allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();

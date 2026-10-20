@@ -15,6 +15,7 @@ export const db = getFirestore();
 
 export const refs = {
   config: () => db.doc("config/global") as DocumentReference<Partial<GameConfig>>,
+  content: () => db.doc("content/global"),
   state: () => db.doc("meta/state") as DocumentReference<GameState>,
   player: (uid: string) => db.doc(`players/${uid}`) as DocumentReference<Player>,
   stock: (id: string) => db.doc(`stocks/${id}`) as DocumentReference<Stock>,

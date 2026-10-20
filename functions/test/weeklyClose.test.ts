@@ -49,7 +49,7 @@ describe("weekly close (§6)", () => {
     expect(report.money.allowancesPaid).toBe(2 * weeklyAllowance);
     expect(report.money.feesCollected).toBeCloseTo(fee, 9);
     expect(report.highlights.winner.name).toBe("Bob");
-    expect(report.markdown).toContain("# Friend Stock Market — Week 1 report");
+    expect(report.markdown).toContain("# Stonker — Week 1 report");
 
     // Weekly price stats reset for the new week.
     const s = await getDoc(`stocks/${alice.uid}`);

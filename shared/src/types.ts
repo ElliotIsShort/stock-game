@@ -64,6 +64,8 @@ export interface Player {
   netWorthWeekStart: number;
   /** When the player last created a standalone post (post cooldown, §spam). Absent for players who haven't posted. */
   lastPostAt?: number;
+  /** Set when the player was deactivated by the bankruptcy rule. Cleared at the next weekly close. */
+  bankruptAt?: number;
 }
 
 export interface Stock {

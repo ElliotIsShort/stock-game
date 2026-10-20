@@ -14,6 +14,8 @@ const NAV = [
   { href: "/portfolio/", label: "Portfolio" },
   { href: "/leaderboard/", label: "Leaderboard" },
   { href: "/reports/", label: "Reports" },
+  { href: "/rules/", label: "Rules" },
+  { href: "/changelog/", label: "Change log" },
 ];
 
 /** App chrome + gatekeeping: signed out → sign in; not approved → registration; else the page. */
@@ -43,10 +45,9 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <>
       <header className="topbar">
-        <Link href="/" className="brand" aria-label="Friend Stock Market">
+        <Link href="/" className="brand" aria-label="Stonker">
           <span aria-hidden="true">📈</span>
-          <span className="brand-full">Friend Stock Market</span>
-          <span className="brand-short" aria-hidden="true">FSM</span>
+          <span>Stonker</span>
         </Link>
         <nav aria-label="Main">
           {nav.map((n) => (

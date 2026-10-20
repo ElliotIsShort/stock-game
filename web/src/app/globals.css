@@ -43,7 +43,6 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
   position: sticky; top: 0; z-index: 10;
 }
 .brand { font-weight: 700; color: var(--text); display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; }
-.brand-short { display: none; }
 .topbar nav { display: flex; gap: .25rem; flex-wrap: wrap; flex: 1; }
 .topbar nav a { padding: .35rem .7rem; border-radius: 6px; color: var(--muted); }
 .topbar nav a[aria-current="page"], .topbar nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
@@ -52,8 +51,6 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
 /* On narrow screens, shorten the brand and give the nav the full width below it. */
 @media (max-width: 600px) {
   .topbar { gap: .5rem .75rem; padding: .6rem .9rem; }
-  .brand-full { display: none; }
-  .brand-short { display: inline; }
   .topbar nav { order: 3; flex-basis: 100%; }
   .me { gap: .75rem; margin-left: auto; font-size: .9rem; }
 }
@@ -160,6 +157,14 @@ ul.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-directio
 .audit pre { font-size: .8rem; background: var(--bg); padding: .5rem; border-radius: 6px; overflow-x: auto; }
 .flag { color: var(--warn); }
 code { background: var(--panel-2); padding: .1rem .3rem; border-radius: 4px; }
+
+/* Rules / change log prose */
+.prose { max-width: 70ch; }
+.prose h1 { margin-top: 0; }
+.prose h2 { margin-top: 1.5rem; }
+.prose ul { margin: .5rem 0; padding-left: 1.25rem; }
+.prose li { margin: .25rem 0; }
+.prose p { margin: .6rem 0; }
 
 /* Stock photos */
 .avatar { border-radius: 50%; object-fit: cover; flex-shrink: 0; vertical-align: middle; display: inline-block; }

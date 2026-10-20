@@ -1,4 +1,5 @@
 import { HttpsError } from "firebase-functions/v2/https";
+import { FieldValue } from "firebase-admin/firestore";
 import {
   ceoBonus,
   isIdleSince,
@@ -323,6 +324,13 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       // Append this week's net-worth sample, keeping the most recent N.
       const points = [...(historyOf.get(p.uid) ?? []), { week, t: now, v: endWorth }].slice(-NET_WORTH_HISTORY_MAX);
       tx.set(refs.netWorthHistory(p.uid), { uid: p.uid, points });
+    }
+    // Bankrupt players come back at the start of each new week (§bankruptcy).
+    // They were deactivated, so they're not in `players`; reactivate directly.
+    for (const p of world.players) {
+      if (p.bankruptAt && !p.isActive) {
+        tx.update(refs.player(p.uid), { isActive: true, bankruptAt: FieldValue.delete(), lastActiveAt: now, netWorthWeekStart: netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) });
+      }
     }
     for (const s of stocks.values()) {
       tx.update(refs.stock(s.id), {

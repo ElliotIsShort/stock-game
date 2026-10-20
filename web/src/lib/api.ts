@@ -33,6 +33,9 @@ export const api = {
     ),
   resetGame: (confirm: string) =>
     call<{ confirm: string }, { deleted: Record<string, number>; requeued: number; declined: number }>("resetGame", { confirm }),
+  updateContent: (patch: { rules?: string; changelog?: string }) => call<typeof patch, { ok: true }>("updateContent", patch),
+  renamePlayer: (uid: string, displayName: string) =>
+    call<{ uid: string; displayName: string }, { ok: true; from: string; to: string }>("renamePlayer", { uid, displayName }),
 };
 
 export function errorMessage(err: unknown): string {

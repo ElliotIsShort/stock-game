@@ -54,30 +54,42 @@ export function PostComposer({
   }
 
   const listed = stocks.filter((s) => s.listed).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const showTagPicker = !linkedTradeId && !defaultTag;
+  const tagName = tag ? (tag === me.uid ? "yourself" : listed.find((s) => s.id === tag)?.displayName) : null;
+  const fieldId = `post-${linkedTradeId ?? defaultTag ?? "main"}`;
 
   return (
     <form onSubmit={submit} className={`composer${compact ? " compact" : ""}`}>
-      <label className="sr-only" htmlFor={`post-${linkedTradeId ?? defaultTag ?? "main"}`}>Post</label>
+      <label className="sr-only" htmlFor={fieldId}>Post</label>
       <textarea
-        id={`post-${linkedTradeId ?? defaultTag ?? "main"}`}
-        placeholder={linkedTradeId ? "Why did you make this trade?" : "Post your thoughts"}
+        id={fieldId}
+        placeholder={
+          linkedTradeId
+            ? "Why did you make this trade?"
+            : tagName
+              ? `Post your thoughts about ${tagName}…`
+              : "Post your thoughts"
+        }
         maxLength={config.maxPostLength}
         rows={compact ? 2 : 3}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
-      <div className="row">
-        {!linkedTradeId && !defaultTag && (
-          <label className="inline">
-            About{" "}
-            <select value={tag} onChange={(e) => setTag(e.target.value)}>
-              <option value="">No one in particular</option>
-              {listed.map((s) => (
-                <option key={s.id} value={s.id}>{s.id === me.uid ? `${s.displayName} (me)` : s.displayName}</option>
-              ))}
-            </select>
+      {showTagPicker && (
+        <div className="tag-row">
+          <label className="inline" htmlFor={`${fieldId}-tag`}>
+            <span aria-hidden="true">🏷️</span> Tag someone
           </label>
-        )}
+          <select id={`${fieldId}-tag`} value={tag} onChange={(e) => setTag(e.target.value)}>
+            <option value="">Not about anyone</option>
+            {listed.map((s) => (
+              <option key={s.id} value={s.id}>{s.id === me.uid ? `${s.displayName} (me)` : s.displayName}</option>
+            ))}
+          </select>
+          {tagName && <span className="tag-chip">This post is about {tagName}</span>}
+        </div>
+      )}
+      <div className="row">
         <span className="muted small">{text.length}/{config.maxPostLength}</span>
         <button type="submit" className="primary" disabled={busy || !text.trim() || cooldown > 0}>
           {cooldown > 0 ? `Wait ${cooldown}s` : "Post"}

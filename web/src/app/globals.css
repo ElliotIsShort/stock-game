@@ -144,6 +144,10 @@ tr.me-row { background: rgba(88, 166, 255, .08); }
 .composer { display: flex; flex-direction: column; gap: .5rem; }
 .composer .row { justify-content: flex-end; flex-wrap: wrap; }
 .composer .row label { margin-right: auto; }
+.tag-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; border-top: 1px dashed var(--border); padding-top: .5rem; }
+.tag-row label { color: var(--text); }
+.tag-row select { width: auto; }
+.tag-chip { font-size: .8rem; color: var(--accent); background: rgba(88, 166, 255, .12); border: 1px solid var(--border); border-radius: 999px; padding: .15rem .6rem; }
 
 /* Misc */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; }

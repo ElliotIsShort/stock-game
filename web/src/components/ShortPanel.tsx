@@ -14,6 +14,9 @@ import { useGame } from "./GameProvider";
 export function ShortPanel({ stock }: { stock: Stock }) {
   const { me, config, myShorts, players } = useGame();
   const [shares, setShares] = useState("");
+  const [openPost, setOpenPost] = useState("");
+  const [closePostFor, setClosePostFor] = useState<string | null>(null);
+  const [closePost, setClosePost] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -46,9 +49,10 @@ export function ShortPanel({ stock }: { stock: Stock }) {
     setError(null);
     setDone(null);
     try {
-      await api.openShort({ stockId: stock.id, shares: value });
+      await api.openShort({ stockId: stock.id, shares: value, postText: openPost.trim() || undefined });
       setDone(`Opened a short on ${fmtShares(value)} shares. You received ${gbp(openQuote.proceeds)}.`);
       setShares("");
+      setOpenPost("");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -61,9 +65,11 @@ export function ShortPanel({ stock }: { stock: Stock }) {
     setError(null);
     setDone(null);
     try {
-      const res = await api.closeShort({ shortId });
+      const res = await api.closeShort({ shortId, postText: closePost.trim() || undefined });
       const pnl = res.realisedPnl ?? 0;
       setDone(`Closed short. ${pnl >= 0 ? "Profit" : "Loss"}: ${gbp(Math.abs(pnl))}.`);
+      setClosePostFor(null);
+      setClosePost("");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -91,12 +97,32 @@ export function ShortPanel({ stock }: { stock: Stock }) {
                 live = 0;
               }
               return (
-                <li key={s.id} className="row between">
-                  <span>
-                    {fmtShares(s.shares)} @ opened {gbp(s.openPrice)}{" "}
-                    <span className={changeClass(live)}>({live >= 0 ? "+" : ""}{gbp(live)} if closed now)</span>
-                  </span>
-                  <button type="button" disabled={busy} onClick={() => close(s.id)}>Close</button>
+                <li key={s.id} className="stack">
+                  <div className="row between">
+                    <span>
+                      {fmtShares(s.shares)} @ opened {gbp(s.openPrice)}{" "}
+                      <span className={changeClass(live)}>({live >= 0 ? "+" : ""}{gbp(live)} if closed now)</span>
+                    </span>
+                    {closePostFor === s.id ? (
+                      <button type="button" disabled={busy} onClick={() => { setClosePostFor(null); setClosePost(""); }}>Cancel</button>
+                    ) : (
+                      <button type="button" disabled={busy} onClick={() => { setClosePostFor(s.id); setClosePost(""); }}>Close…</button>
+                    )}
+                  </div>
+                  {closePostFor === s.id && (
+                    <div className="stack">
+                      <textarea
+                        rows={2}
+                        maxLength={config.maxPostLength}
+                        value={closePost}
+                        onChange={(e) => setClosePost(e.target.value)}
+                        placeholder="Add a post (optional) — why are you closing?"
+                      />
+                      <button type="button" className="primary" disabled={busy} onClick={() => close(s.id)}>
+                        {busy ? "Closing…" : "Confirm close"}
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -117,6 +143,10 @@ export function ShortPanel({ stock }: { stock: Stock }) {
             <dd>{gbp(openQuote.priceAfter)} <span className={changeClass(openQuote.priceAfter / openQuote.priceBefore - 1)}>{pct(openQuote.priceAfter / openQuote.priceBefore - 1)}</span></dd>
           </dl>
         )}
+        <label>
+          Add a post (optional)
+          <textarea rows={2} maxLength={config.maxPostLength} value={openPost} onChange={(e) => setOpenPost(e.target.value)} placeholder="Why? e.g. they're getting divorced" />
+        </label>
         <button type="submit" className="primary" disabled={busy || !openQuote}>Open short</button>
       </form>
       {error && <p className="error small" role="alert">{error}</p>}

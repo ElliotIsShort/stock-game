@@ -288,6 +288,13 @@ Firestore live and writes only through callable functions.
   once per session. `useGame()` exposes it all.
 - `components/Shell.tsx` — gatekeeping: not configured → setup notice; signed
   out → `SignIn`; not approved → `Registration`; otherwise the nav + page.
+  Nav: Feed, Market, Portfolio, Leaderboard, Reports (+ Admin). On phones it is
+  a single horizontally-swipeable row.
+- `components/AccountMenu.tsx` — avatar dropdown in the top bar (after
+  easyui's origin-dropdown): name/email, cash, net worth, week, then My stock,
+  Rules, Change log, a disabled "Preferences — coming soon" slot, and Sign out.
+  This is where future account options should go. Full menu-button keyboard
+  support (arrows, Home/End, Esc returns focus, Tab closes).
 
 **Routes (`app/`)**
 | Path | Screen |
@@ -298,13 +305,42 @@ Firestore live and writes only through callable functions.
 | `/portfolio` | Cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, open shorts (live P/L), CEO-bonus summary, recent trades. |
 | `/leaderboard` | Ranked by score (idle greyed and unranked), live weekly-growth leader. |
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
-| `/rules`, `/changelog` | Editable `content/global`, rendered with `SimpleMarkdown`. |
+| `/rules`, `/changelog` | Editable `content/global`, rendered with `SimpleMarkdown`. Reached from the account menu. |
 | `/admin` | Approvals, Players (+rename), Weekly close, Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |
 
 **Components:** `Feed`, `TradePanel` (live AMM preview using the shared quote
 functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
-`Avatar`, `LineChart` / `PriceChart` (SVG), `SimpleMarkdown`, `SignIn`,
-`Registration`.
+`Avatar`, `LineChart` / `PriceChart`, `SlidePagination`, `AccountMenu`,
+`SimpleMarkdown`, `SignIn`, `Registration`.
+
+**UI conventions.** No UI framework, no Tailwind, no animation library: all
+styling is plain CSS in `app/globals.css` using the `--bg/--panel/--accent/--up/--down`
+variables, and motion is CSS transitions or `requestAnimationFrame`. The
+interactive pieces are hand-ported from [easyui](https://easyui.site/components)
+(which uses Tailwind + framer-motion) rather than installed. Every animation
+respects `prefers-reduced-motion`.
+
+- **`LineChart`** (`components/LineChart.tsx`, maths in `lib/chart.ts`) — the
+  interactive area chart used for price, net worth and per-holding value.
+  Range pills (only those shorter than the data, plus All), a header showing
+  the hovered value and % change over the range, scrub crosshair + tooltip
+  (mouse, horizontal touch drag, or arrow keys), left-to-right reveal, and an
+  interruptible morph when the range changes or a live trade arrives (every
+  range is resampled to 160 points so shapes interpolate 1:1). `step` draws a
+  step line; `baseline` draws a dashed reference (cost basis). The SVG is
+  absolutely positioned inside a measured container so it never props a grid
+  cell open on resize.
+- **Feed pagination** (`components/Feed.tsx`, `SlidePagination.tsx`,
+  `lib/pagination.ts`) — 15 items per page on the Feed, 10 on a stock page.
+  Trades and posts are two newest-first Firestore queries merged on the
+  client, so there's no cheap total count. Each query loads the current page
+  plus one page of lookahead; only the merged prefix newer than the oldest
+  item of any truncated query is treated as complete (`feedCutoff`), and the
+  query holding that cutoff back is extended. Limits only grow, so paging back
+  costs no extra reads. A trailing "…" means older pages exist that haven't
+  been loaded yet.
+- **`useSlideIndicator`** (`lib/hooks.ts`) — measures the active child and
+  slides a highlight under it; shared by the chart range pills and the pager.
 
 ---
 

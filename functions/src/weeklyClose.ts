@@ -4,7 +4,9 @@ import {
   ceoBonus,
   isIdleSince,
   leaderboardScore,
+  quoteCloseShort,
   shortBorrowFee,
+  shortsLiability,
   mean,
   mechanicsExplainer,
   median,
@@ -14,11 +16,13 @@ import {
   targetPoolCash,
   topUpPool,
   weeklyGrowth,
+  weeklyPrizeWinners,
   type GrowthRow,
   type LeaderboardRow,
   type Player,
   type PlayerSnapshot,
   type Post,
+  type PrizeWinner,
   type ReportFlag,
   type Short,
   type Stock,
@@ -37,13 +41,13 @@ export interface CloseOptions {
 }
 
 export type CloseResult =
-  | { closed: true; week: number; reportId: string; winner: string | null; prize: number }
+  | { closed: true; week: number; reportId: string; winners: PrizeWinner[]; prize: number }
   | { closed: false; reason: string };
 
 /**
  * §6 weekly close, in order:
- *   snapshot → allowance → CEO bonus → pool top-up → leaderboard + winner →
- *   pay prize → store report.
+ *   snapshot → allowance → CEO bonus → pool top-up → leaderboard + winners →
+ *   split prize → store report.
  * Runs as a single Firestore transaction so balances are never half-updated
  * and trades can't interleave with the close.
  */
@@ -87,8 +91,29 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     const stocks = new Map<string, Stock>(world.stocks.filter((s) => s.listed).map((s) => [s.id, { ...s }]));
     const byUid = holdingsByUid(world.holdings);
     const priceOf = (id: string) => stocks.get(id)?.price;
-    const worthOf = (p: Player) => netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf);
-    const holdingsValueOf = (p: Player) => worthOf(p) - p.cash;
+    // Open shorts by owner, so net worth can subtract their liability (Option B:
+    // an open short never raises net worth, so it can't game the leaderboard).
+    const shortsByOwner = new Map<string, Short[]>();
+    for (const s of openShorts) {
+      const list = shortsByOwner.get(s.ownerId) ?? [];
+      list.push(s);
+      shortsByOwner.set(s.ownerId, list);
+    }
+    const shortLiabilityOf = (uid: string) => {
+      const list = shortsByOwner.get(uid);
+      if (!list || list.length === 0) return 0;
+      return shortsLiability(list, (i) => {
+        const stock = stocks.get(list[i].stockId);
+        if (!stock || !(stock.poolShares > list[i].shares)) return undefined;
+        try {
+          return quoteCloseShort(stock, list[i].shares, cfg.tradingFeePct).cost;
+        } catch {
+          return undefined;
+        }
+      });
+    };
+    const worthOf = (p: Player) => netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) - shortLiabilityOf(p.uid);
+    const holdingsValueOf = (p: Player) => netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) - p.cash;
 
     // ---------- Idle flagging (§5) ----------
     const newlyIdle: string[] = [];
@@ -171,7 +196,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     }
     const poolTopUps = [...toppedUp.values()].reduce((a, b) => a + b, 0);
 
-    // ---------- 5. Leaderboard + weekly prize winner ----------
+    // ---------- 5. Leaderboard + weekly prize winners ----------
     const growth: GrowthRow[] = [...players.values()].map((p) => {
       const end = worthOf(p);
       const allowance = allowanceOf.get(p.uid) ?? 0;
@@ -186,16 +211,23 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       };
     });
     growth.sort((a, b) => b.weeklyGrowth - a.weeklyGrowth);
-    const eligible = growth.filter((g) => !players.get(g.uid)!.isIdle && g.netWorthStart > 0);
-    const winnerRow = eligible[0] ?? null;
+    const winners = weeklyPrizeWinners(
+      growth.map((g) => ({
+        playerId: g.uid,
+        name: g.name,
+        growth: g.weeklyGrowth,
+        netWorthStart: g.netWorthStart,
+        isIdle: players.get(g.uid)!.isIdle,
+      })),
+      state.prizePool,
+      cfg.prizeSplitPct,
+    );
 
-    // ---------- 6. Pay prize pool to winner, reset to 0 ----------
+    // ---------- 6. Split the prize pool among the winners, reset to 0 ----------
+    // Rolls over untouched when nobody is eligible.
     const prizePoolBeforePayout = state.prizePool;
-    let prizePaid = 0;
-    if (winnerRow) {
-      prizePaid = state.prizePool;
-      players.get(winnerRow.uid)!.cash += prizePaid;
-    }
+    for (const w of winners) players.get(w.playerId)!.cash += w.prizeAmount;
+    const prizePaid = winners.length > 0 ? state.prizePool : 0;
 
     const leaderboard: LeaderboardRow[] = [...players.values()]
       .map((p) => ({
@@ -315,7 +347,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       highlights: {
         leaderboard,
         growth,
-        winner: winnerRow ? { uid: winnerRow.uid, name: winnerRow.name, weeklyGrowth: winnerRow.weeklyGrowth, prize: prizePaid } : null,
+        winners,
         biggestGainers: stockStats.filter((s) => s.pctChange > 0).slice(0, 3).map((s) => ({ name: s.name, pctChange: s.pctChange })),
         biggestLosers: [...stockStats].reverse().filter((s) => s.pctChange < 0).slice(0, 3).map((s) => ({ name: s.name, pctChange: s.pctChange })),
         topPosts: [...posts]
@@ -350,7 +382,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     // They were deactivated, so they're not in `players`; reactivate directly.
     for (const p of world.players) {
       if (p.bankruptAt && !p.isActive) {
-        tx.update(refs.player(p.uid), { isActive: true, bankruptAt: FieldValue.delete(), lastActiveAt: now, netWorthWeekStart: netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) });
+        tx.update(refs.player(p.uid), { isActive: true, bankruptAt: FieldValue.delete(), lastActiveAt: now, netWorthWeekStart: worthOf(p) });
       }
     }
     for (const s of stocks.values()) {
@@ -377,9 +409,15 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     tx.set(reportRef, report);
 
     const postRef = db.collection("posts").doc();
-    const winnerText = winnerRow
-      ? `${winnerRow.name} wins the £${prizePaid.toFixed(2)} prize pool with ${(winnerRow.weeklyGrowth * 100).toFixed(2)}% weekly growth.`
-      : "No eligible winner; the prize pool rolls over.";
+    const growthText = (g: number) => `${(g * 100).toFixed(2)}%`;
+    const winnerText =
+      winners.length === 0
+        ? "No eligible winner; the prize pool rolls over."
+        : winners.length === 1
+          ? `${winners[0].name} wins the £${prizePaid.toFixed(2)} prize pool with ${growthText(winners[0].growth)} weekly growth.`
+          : `The £${prizePaid.toFixed(2)} prize pool is split: ${winners
+              .map((w, i) => `${i + 1}. ${w.name} £${w.prizeAmount.toFixed(2)} (${growthText(w.growth)})`)
+              .join(", ")}.`;
     const sysPost: Post = {
       id: postRef.id,
       authorId: "system",
@@ -396,9 +434,17 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       createdAt: now,
     };
     tx.set(postRef, sysPost);
-    tx.set(auditRef(), auditEntry(opts.actorId ?? "cron", "weeklyClose", reportRef.id, { week, trigger: opts.trigger, prizePaid }, now));
+    tx.set(
+      auditRef(),
+      auditEntry(opts.actorId ?? "cron", "weeklyClose", reportRef.id, {
+        week,
+        trigger: opts.trigger,
+        prizePaid,
+        winners: winners.map((w) => ({ playerId: w.playerId, prizeAmount: w.prizeAmount })),
+      }, now),
+    );
 
-    return { closed: true, week, reportId: reportRef.id, winner: winnerRow?.name ?? null, prize: prizePaid };
+    return { closed: true, week, reportId: reportRef.id, winners, prize: prizePaid };
   });
 }
 

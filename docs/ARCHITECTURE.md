@@ -62,11 +62,11 @@ everywhere so the same types work on server, client and in stored reports.
 | File | Responsibility |
 |---|---|
 | `amm.ts` | Constant-product AMM: `quoteBuy`, `quoteSell`, `targetPoolCash`, `listingPool`, `topUpPool`. |
-| `economy.ts` | Money rules: `startingCash`, `listingPrice`, `netWorth`, `leaderboardScore`, `weeklyGrowth`, `ceoBonus`, `isIdleSince`, `roundMoney`, `median`/`mean`, epsilons. |
+| `economy.ts` | Money rules: `startingCash`, `listingPrice`, `netWorth`, `leaderboardScore`, `weeklyGrowth`, `prizeSplit`/`weeklyPrizeWinners`, `ceoBonus`, `isIdleSince`, `roundMoney`, `median`/`mean`, epsilons. |
 | `positions.ts` | `positionFromTrades` — average-cost unrealised P/L for a holding. |
 | `shorts.ts` | Synthetic short quotes: `quoteOpenShort`, `quoteCloseShort`, exposure/capital/borrow-fee helpers. |
 | `bankruptcy.ts` | `settleDebt` — liquidate holdings, pay creditors proportionally, flag bankrupt. |
-| `report.ts` | `WeeklyReport` shape, `mechanicsExplainer`, `reportToMarkdown`. |
+| `report.ts` | `WeeklyReport` shape, `mechanicsExplainer`, `reportToMarkdown`, `prizeSplitText`, `reportWinners` (reads pre-split reports' single `winner` too). |
 | `content.ts` | `SiteContent` (rules + changelog), defaults, `MAX_CONTENT_LENGTH`. |
 | `photo.ts` | Avatar validation: `parsePhotoDataUrl`, `PHOTO_SIZE_PX`, `MAX_PHOTO_BYTES`. |
 | `config.ts` | `DEFAULT_CONFIG`, `CONFIG_BOUNDS`, `mergeConfig`, `validateConfigPatch`. |
@@ -125,6 +125,8 @@ C_target = Δc / (√(1 + targetImpact) − 1)
 | `netWorth(cash, holdings, priceOf)` | `cash + Σ shares × spot price`. |
 | `leaderboardScore(nw, startingCash, totalAllowances)` | `nw / (startingCash + totalAllowances)`. Everyone starts at 1.00. **CEO bonus is excluded from the denominator** but counts in net worth. |
 | `weeklyGrowth(start, end, allowance)` | `(end − start − allowance) / start`. |
+| `prizeSplit(n, splitPct)` | First `min(n, splitPct.length)` entries of `prizeSplitPct`, rescaled to sum to 1. |
+| `weeklyPrizeWinners(candidates, pool, splitPct)` | Non-idle players with `netWorthStart > 0`, ranked by weekly growth; the top N share the whole pool by `prizeSplit`. The last winner absorbs float rounding so amounts sum to the pool. Empty → pool rolls over. Also drives the live "Prize now" column on `/leaderboard`. |
 | `ceoBonus(sharesHeldByOthers, price, rate)` | `rate × sharesHeldByOthers × price`. |
 | `isIdleSince(lastActiveAt, now, weeks)` | true when no activity for `idleThresholdWeeks`. |
 
@@ -190,7 +192,11 @@ social and never affect price.
 Every tunable, with its default (`DEFAULT_CONFIG`) and validation bounds
 (`CONFIG_BOUNDS`). The admin Config editor is generated from `CONFIG_BOUNDS`;
 `updateConfig` validates patches with `validateConfigPatch` (rejects unknown
-keys, non-numbers, out-of-range, non-integers).
+keys, non-numbers, out-of-range, non-integers). Most settings are numbers
+(`NumberBound`); `prizeSplitPct` is a list (`ListBound`, `kind: "list"`): 1–10
+non-negative numbers with a positive first entry, edited as comma-separated
+text in the admin UI. `mergeConfig` falls back to the default for an invalid
+stored list.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -210,6 +216,7 @@ keys, non-numbers, out-of-range, non-integers).
 | `postCooldownSeconds` | 10 | Min seconds between a player's standalone posts (0 disables). |
 | `maxShortExposurePct` | 0.5 | Max open-short value as a fraction of capital. |
 | `shortBorrowFeePct` | 0.02 | Weekly borrow fee on each open short's value. |
+| `prizeSplitPct` | [0.6, 0.25, 0.15] | Weekly prize split by growth rank; entries used are rescaled to sum to 1. |
 
 ---
 
@@ -256,8 +263,8 @@ and trades can't interleave. Order (design §6):
 4. **CEO bonus** = `bonusRate × shares held by others × price`.
 5. **Short borrow fees** charged to each open short's owner into the prize pool.
 6. **Pool top-up** to target depth at the new average net worth (price unchanged).
-7. **Leaderboard + winner** = highest `weeklyGrowth` among non-idle players with a positive start-of-week net worth.
-8. **Pay the entire prize pool** to the winner, reset to 0 (rolls over if no eligible winner).
+7. **Leaderboard + winners** = `weeklyPrizeWinners`: the top `min(eligible, prizeSplitPct.length)` by `weeklyGrowth` among non-idle players with a positive start-of-week net worth.
+8. **Split the entire prize pool** among the winners by the rescaled `prizeSplitPct`, reset to 0 (rolls over if nobody is eligible). Stored as `highlights.winners[]` (`playerId`, `name`, `growth`, `prizeAmount`); `CloseResult` returns the same `winners` plus `prize` (total paid).
 9. **Build and store the WeeklyReport** (money, prices, health, activity, highlights, flags, markdown).
 10. **Writes**: updated players (incl. next week's `netWorthWeekStart`), append a net-worth history point, **reactivate bankrupt players**, reset stock weekly stats, advance `meta/state` to `week + 1` (`prizePool = remaining + borrowFeesCollected`), update each short's `borrowFeesPaid`, post a "Week N closed" system message, audit.
 
@@ -303,7 +310,7 @@ Firestore live and writes only through callable functions.
 | `/market` | Sortable table of listed stocks (price, week change, trades, your holdings), median price. |
 | `/stock?id=` | Stock detail: avatar, price, week stats, pool depth, price chart, `TradePanel`, `ShortPanel`, `PhotoEditor` (own), holders, scoped feed. |
 | `/portfolio` | Cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, open shorts (live P/L), CEO-bonus summary, recent trades. |
-| `/leaderboard` | Ranked by score (idle greyed and unranked), live weekly-growth leader. |
+| `/leaderboard` | Ranked by score (idle greyed and unranked), live prize positions + projected "Prize now" share per player. |
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
 | `/rules`, `/changelog` | Editable `content/global`, rendered with `SimpleMarkdown`. Reached from the account menu. |
 | `/admin` | Approvals, Players (+rename), Weekly close, Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |

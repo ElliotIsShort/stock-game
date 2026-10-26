@@ -44,6 +44,54 @@ export function weeklyGrowth(netWorthStart: number, netWorthEnd: number, allowan
   return (netWorthEnd - netWorthStart - allowanceThisWeek) / netWorthStart;
 }
 
+/** A player in the running for the weekly prize. */
+export interface PrizeCandidate {
+  playerId: string;
+  name: string;
+  /** weeklyGrowth for the week being closed. */
+  growth: number;
+  netWorthStart: number;
+  isIdle: boolean;
+}
+
+export interface PrizeWinner {
+  playerId: string;
+  name: string;
+  growth: number;
+  prizeAmount: number;
+}
+
+/**
+ * The split actually used for `winnerCount` winners: the first
+ * min(winnerCount, splitPct.length) entries, rescaled to sum to 1.
+ */
+export function prizeSplit(winnerCount: number, splitPct: readonly number[]): number[] {
+  const used = splitPct.slice(0, Math.max(0, Math.min(winnerCount, splitPct.length)));
+  const total = used.reduce((a, b) => a + b, 0);
+  // Config validation keeps the first entry positive; fall back to an even split rather than divide by zero.
+  if (!(total > 0)) return used.map(() => 1 / used.length);
+  return used.map((s) => s / total);
+}
+
+/**
+ * §5 weekly prize: non-idle players with a positive start-of-week net worth,
+ * ranked by weekly growth (highest first). The top N = min(eligible,
+ * splitPct.length) share the whole pool by the rescaled split. Empty when
+ * nobody is eligible (the pool rolls over). The last winner absorbs float
+ * rounding so the amounts always add up to the full pool.
+ */
+export function weeklyPrizeWinners(candidates: readonly PrizeCandidate[], prizePool: number, splitPct: readonly number[]): PrizeWinner[] {
+  const ranked = candidates.filter((c) => !c.isIdle && c.netWorthStart > 0).sort((a, b) => b.growth - a.growth);
+  const split = prizeSplit(ranked.length, splitPct);
+  let paid = 0;
+  return split.map((share, i) => {
+    const c = ranked[i];
+    const prizeAmount = i === split.length - 1 ? prizePool - paid : prizePool * share;
+    paid += prizeAmount;
+    return { playerId: c.playerId, name: c.name, growth: c.growth, prizeAmount };
+  });
+}
+
 /** §3: bonus(P) = bonusRate × Σ (shares of P held by others × price of P) */
 export function ceoBonus(sharesHeldByOthers: number, price: number, bonusRate: number): number {
   return bonusRate * sharesHeldByOthers * price;

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { collection, orderBy, query } from "firebase/firestore";
-import type { WeeklyReport } from "@fsm/shared";
+import { reportWinners, type PrizeWinner, type WeeklyReport } from "@fsm/shared";
 import { BarChart } from "@/components/BarChart";
 import { useGame } from "@/components/GameProvider";
 import { LineChart } from "@/components/LineChart";
@@ -13,6 +13,11 @@ import { gbp } from "@/lib/format";
 
 /** Weeks shown in the money-flow chart; older weeks are still in the list below. */
 const CHART_WEEKS = 12;
+
+function winnersSummary(winners: PrizeWinner[]): string {
+  if (winners.length === 0) return "no winner";
+  return `prize: ${winners.map((w) => `${w.name} ${gbp(w.prizeAmount)}`).join(", ")}`;
+}
 
 export default function ReportsPage() {
   const { stocks } = useGame();
@@ -64,7 +69,7 @@ export default function ReportsPage() {
             <Link href={`/report/?id=${encodeURIComponent(r.id)}`}>Week {r.week}</Link>
             <span className="muted small">
               {new Date(r.generatedAt).toLocaleDateString("en-GB")} ·{" "}
-              {r.highlights.winner ? `${r.highlights.winner.name} won ${gbp(r.highlights.winner.prize)}` : "no winner"} ·{" "}
+              {winnersSummary(reportWinners(r))} ·{" "}
               {r.activity.tradeCount} trades · {r.flags.length} flag(s)
             </span>
           </li>

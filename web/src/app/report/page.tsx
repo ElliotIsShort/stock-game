@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { doc } from "firebase/firestore";
-import type { WeeklyReport } from "@fsm/shared";
+import { reportWinners, type WeeklyReport } from "@fsm/shared";
 import { fb } from "@/lib/firebase";
 import { useDoc } from "@/lib/hooks";
 import { changeClass, gbp, pct } from "@/lib/format";
@@ -33,6 +33,7 @@ function ReportView() {
     setTimeout(() => setCopied(null), 2000);
   }
 
+  const winners = reportWinners(r);
   const c = r.changes;
   const delta = (key: string, fmt: (n: number) => string) =>
     c[key] === null || c[key] === undefined ? null : (
@@ -54,11 +55,20 @@ function ReportView() {
 
       <section className="card">
         <h2>Highlights</h2>
-        <p>
-          {r.highlights.winner
-            ? <>🏆 <strong>{r.highlights.winner.name}</strong> won {gbp(r.highlights.winner.prize)} with {pct(r.highlights.winner.weeklyGrowth, 2)} weekly growth.</>
-            : "No eligible winner this week; the prize pool rolled over."}
-        </p>
+        {winners.length === 0 ? (
+          <p>No eligible winner this week; the prize pool rolled over.</p>
+        ) : (
+          <>
+            <p>🏆 The {gbp(r.money.prizePaid)} prize pool went to the top {winners.length === 1 ? "weekly grower" : `${winners.length} weekly growers`}:</p>
+            <ol>
+              {winners.map((w) => (
+                <li key={w.playerId}>
+                  <strong>{w.name}</strong> won {gbp(w.prizeAmount)} with {pct(w.growth, 2)} weekly growth.
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
         {r.flags.length > 0 && (
           <ul>
             {r.flags.map((f, i) => <li key={i} className="flag">⚠️ {f.message}</li>)}

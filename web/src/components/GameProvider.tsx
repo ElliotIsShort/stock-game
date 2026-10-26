@@ -8,6 +8,8 @@ import {
   leaderboardScore,
   mergeConfig,
   netWorth,
+  quoteCloseShort,
+  shortsLiability,
   type GameConfig,
   type GameState,
   type Holding,
@@ -111,9 +113,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const playersQ = useQuery<Player>(liveDb ? collection(liveDb, "players") : null, [on]);
   const holdingsQ = useQuery<Holding>(liveDb ? collection(liveDb, "holdings") : null, [on]);
   const photosQ = useQuery<StockPhoto>(liveDb ? collection(liveDb, "photos") : null, [on]);
-  const myShortsQ = useQuery<Short>(
-    liveDb && uid ? query(collection(liveDb, "shorts"), where("ownerId", "==", uid), where("status", "==", "open")) : null,
-    [on, uid],
+  // All open shorts: needed so the leaderboard can offset everyone's net worth,
+  // not just the signed-in player's. Members may read all shorts.
+  const openShortsQ = useQuery<Short>(
+    liveDb ? query(collection(liveDb, "shorts"), where("status", "==", "open")) : null,
+    [on],
   );
   const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, "meta", "state") : null, [on]);
   const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, "config", "global") : null, [on]);
@@ -129,6 +133,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<GameContextValue>(() => {
     const stocks = stocksQ.data;
+    const feePct = (configDoc.data ? mergeConfig(configDoc.data) : DEFAULT_CONFIG).tradingFeePct;
     const photoById = new Map(photosQ.data.map((p) => [p.uid, p.dataUrl]));
     const stockById = new Map(stocks.map((s) => [s.id, s]));
     const priceOf = (id: string) => {
@@ -141,12 +146,33 @@ export function GameProvider({ children }: { children: ReactNode }) {
       list.push(h);
       byUid.set(h.uid, list);
     }
+    // Open shorts by owner, to subtract their liability from net worth (Option B).
+    const shortsByOwner = new Map<string, Short[]>();
+    for (const s of openShortsQ.data) {
+      const list = shortsByOwner.get(s.ownerId) ?? [];
+      list.push(s);
+      shortsByOwner.set(s.ownerId, list);
+    }
+    const liabilityOf = (ownerUid: string) => {
+      const list = shortsByOwner.get(ownerUid);
+      if (!list || list.length === 0) return 0;
+      return shortsLiability(list, (i) => {
+        const stock = stockById.get(list[i].stockId);
+        if (!stock || !stock.listed || !(stock.poolShares > list[i].shares)) return undefined;
+        try {
+          return quoteCloseShort(stock, list[i].shares, feePct).cost;
+        } catch {
+          return undefined;
+        }
+      });
+    };
     const players: PlayerView[] = playersQ.data.map((p) => {
-      const nw = netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf);
+      const holdingsValue = netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) - p.cash;
+      const nw = p.cash + holdingsValue - liabilityOf(p.uid);
       return {
         ...p,
         netWorth: nw,
-        holdingsValue: nw - p.cash,
+        holdingsValue,
         score: leaderboardScore(nw, p.startingCash, p.totalAllowances),
       };
     });
@@ -171,10 +197,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       playerById: new Map(players.map((p) => [p.uid, p])),
       holdings: holdingsQ.data,
       myHoldings: uid ? (byUid.get(uid) ?? []) : [],
-      myShorts: myShortsQ.data,
+      myShorts: uid ? openShortsQ.data.filter((s) => s.ownerId === uid) : [],
       photoOf: (id: string) => photoById.get(id),
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, myShortsQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

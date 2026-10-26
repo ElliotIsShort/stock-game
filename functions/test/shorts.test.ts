@@ -87,4 +87,25 @@ describe("weekly close with open shorts", () => {
     // The winner wasn't decided by Bob's paper short gain.
     expect(bobBefore).toBeGreaterThan(0);
   });
+
+  it("opening a big short does NOT inflate net worth at weekly close (Option B)", async () => {
+    // Baseline: close week 1 with no shorts, capture Bob's recorded net worth.
+    await call(alice, "runWeeklyClose", { expectedWeek: 1 });
+    const baseline = (await getDoc(`players/${bob.uid}`)).netWorthWeekStart;
+
+    // Bob opens the largest short he can right before the next close.
+    await call(bob, "openShort", { stockId: alice.uid, shares: 5 });
+    const cashAfterOpen = (await getDoc(`players/${bob.uid}`)).cash;
+    expect(cashAfterOpen).toBeGreaterThan(baseline - 1); // he did receive cash
+
+    const report = await call(alice, "runWeeklyClose", { expectedWeek: 2 });
+    expect(report.closed).toBe(true);
+    // His net worth at close must not have jumped by the short proceeds. Allowing
+    // only for the allowance he legitimately received, it's nowhere near cash+proceeds.
+    const after = await getDoc(`players/${bob.uid}`);
+    const openShort = (await listDocs("shorts")).find((s) => s.ownerId === bob.uid);
+    // Net worth should be ~ baseline + allowance − borrow fee, NOT lifted by the ~hundreds of proceeds.
+    expect(after.netWorthWeekStart).toBeLessThan(cashAfterOpen);
+    expect(openShort.borrowFeesPaid).toBeGreaterThan(0);
+  });
 });

@@ -4,7 +4,17 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { doc } from "firebase/firestore";
-import { CONFIG_BOUNDS, DEFAULT_CHANGELOG, DEFAULT_RULES, type AuditEntry, type GameConfig, type Registration, type SiteContent } from "@fsm/shared";
+import {
+  CONFIG_BOUNDS,
+  DEFAULT_CHANGELOG,
+  DEFAULT_RULES,
+  prizeSplitText,
+  type AuditEntry,
+  type Bound,
+  type GameConfig,
+  type Registration,
+  type SiteContent,
+} from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { fb } from "@/lib/firebase";
 import { useDoc, useQuery } from "@/lib/hooks";
@@ -214,15 +224,16 @@ function Approvals() {
 }
 
 function WeeklyClose() {
-  const { state } = useGame();
+  const { state, config } = useGame();
   const { busy, run, view } = useAction();
   const week = state?.currentWeek ?? 1;
   return (
     <section className="card">
       <h2>Weekly close</h2>
       <p className="muted small">
-        Snapshots balances, pays allowances and CEO bonuses, tops up pools, pays the {gbp(state?.prizePool ?? 0)} prize pool to the top
-        weekly grower and stores the report. {state?.lastCloseAt ? `Last close ${ago(state.lastCloseAt)}.` : "Never closed."}
+        Snapshots balances, pays allowances and CEO bonuses, tops up pools, splits the {gbp(state?.prizePool ?? 0)} prize pool among the
+        top weekly growers ({prizeSplitText(config.prizeSplitPct)}) and stores the report.{" "}
+        {state?.lastCloseAt ? `Last close ${ago(state.lastCloseAt)}.` : "Never closed."}
       </p>
       <button
         type="button"
@@ -233,7 +244,10 @@ function WeeklyClose() {
           run(async () => {
             const res = await api.runWeeklyClose(week);
             if (!res.closed) return `Skipped: ${res.reason}`;
-            return `Week ${res.week} closed. ${res.winner ? `${res.winner} won ${gbp(res.prize ?? 0)}.` : "No winner."}`;
+            const winners = res.winners ?? [];
+            return `Week ${res.week} closed. ${
+              winners.length ? `Prize: ${winners.map((w) => `${w.name} ${gbp(w.prizeAmount)}`).join(", ")}.` : "No winner; the prize pool rolls over."
+            }`;
           });
         }}
       >
@@ -250,19 +264,30 @@ function ConfigEditor() {
   const { busy, run, view } = useAction();
 
   useEffect(() => {
-    setDraft(Object.fromEntries(Object.entries(config).map(([k, v]) => [k, String(v)])));
+    setDraft(Object.fromEntries(Object.entries(config).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)])));
   }, [config]);
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const patch: Partial<GameConfig> = {};
+    const patch: Record<string, number | number[]> = {};
     for (const key of Object.keys(CONFIG_BOUNDS) as (keyof GameConfig)[]) {
-      const v = Number(draft[key]);
-      if (draft[key] !== undefined && v !== config[key]) patch[key] = v;
+      const raw = draft[key];
+      if (raw === undefined) continue;
+      const b: Bound = CONFIG_BOUNDS[key];
+      const current = config[key];
+      if (b.kind === "list") {
+        // Blank pieces (e.g. a trailing comma) are dropped; anything non-numeric becomes NaN and the server rejects it.
+        const list = raw.split(",").map((s) => s.trim()).filter((s) => s !== "").map(Number);
+        const prev = Array.isArray(current) ? current : [];
+        if (list.length !== prev.length || list.some((v, i) => v !== prev[i])) patch[key] = list;
+      } else {
+        const v = Number(raw);
+        if (v !== current) patch[key] = v;
+      }
     }
     if (Object.keys(patch).length === 0) return;
     run(async () => {
-      await api.updateConfig(patch);
+      await api.updateConfig(patch as Partial<GameConfig>);
       return `Saved ${Object.keys(patch).join(", ")}.`;
     });
   }
@@ -273,19 +298,31 @@ function ConfigEditor() {
       <p className="muted small">Changes apply immediately to new trades and to the next weekly close. Every change is audit-logged.</p>
       <form onSubmit={submit} className="config-grid">
         {(Object.keys(CONFIG_BOUNDS) as (keyof GameConfig)[]).map((key) => {
-          const b = CONFIG_BOUNDS[key];
+          const b: Bound = CONFIG_BOUNDS[key];
+          const onChange = (value: string) => setDraft({ ...draft, [key]: value });
           return (
             <label key={key}>
               {b.label}
-              <input
-                type="number"
-                step={b.integer ? 1 : "any"}
-                min={b.min}
-                max={b.max}
-                value={draft[key] ?? ""}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-                aria-describedby={`help-${key}`}
-              />
+              {b.kind === "list" ? (
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={draft[key] ?? ""}
+                  onChange={(e) => onChange(e.target.value)}
+                  aria-describedby={`help-${key}`}
+                />
+              ) : (
+                <input
+                  type="number"
+                  step={b.integer ? 1 : "any"}
+                  min={b.min}
+                  max={b.max}
+                  value={draft[key] ?? ""}
+                  onChange={(e) => onChange(e.target.value)}
+                  aria-describedby={`help-${key}`}
+                />
+              )}
               <span id={`help-${key}`} className="muted small">{b.help}</span>
             </label>
           );

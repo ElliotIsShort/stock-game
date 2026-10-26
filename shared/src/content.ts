@@ -31,7 +31,7 @@ Everyone in the group is a tradable stock, named after them. You trade each othe
 
 ## Winning
 - The leaderboard ranks everyone by growth: net worth ÷ (starting cash + allowances). Everyone starts at 1.00.
-- Each week the whole prize pool goes to the player with the highest weekly growth.
+- Each week the whole prize pool is shared by the top three weekly growers: 60% to first, 25% to second and 15% to third. If fewer than three people qualify, the shares are scaled up so the whole pool still gets paid out.
 
 ## Going quiet
 - If you don't sign in or trade for a few weeks you're marked idle: no allowance or bonus, and you drop off the ranking. Your stock stays tradable. Signing in brings you straight back.

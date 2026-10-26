@@ -1,3 +1,4 @@
+import { prizeSplit, type PrizeWinner } from "./economy";
 import type { GameConfig } from "./types";
 
 export interface StockWeekStats {
@@ -103,7 +104,8 @@ export interface WeeklyReport {
   highlights: {
     leaderboard: LeaderboardRow[];
     growth: GrowthRow[];
-    winner: { uid: string; name: string; weeklyGrowth: number; prize: number } | null;
+    /** Weekly prize winners in rank order; empty when nobody was eligible (pool rolled over). */
+    winners: PrizeWinner[];
     biggestGainers: { name: string; pctChange: number }[];
     biggestLosers: { name: string; pctChange: number }[];
     topPosts: { postId: string; authorName: string; text: string; reactionCount: number }[];
@@ -121,13 +123,43 @@ export interface WeeklyReport {
 const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
 const gbp = (n: number) => `£${n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** The configured prize split as percentages of the pool, e.g. "60.00% / 25.00% / 15.00%". */
+export function prizeSplitText(splitPct: readonly number[]): string {
+  return prizeSplit(splitPct.length, splitPct).map(pct).join(" / ");
+}
+
+/** Shape of `highlights.winner` on reports stored before the prize was split. */
+interface LegacyWinner {
+  uid: string;
+  name: string;
+  weeklyGrowth: number;
+  prize: number;
+}
+
+/**
+ * Prize winners for any stored report. Reports written before the prize split
+ * have a single `highlights.winner` instead of `highlights.winners`.
+ */
+export function reportWinners(r: Pick<WeeklyReport, "highlights">): PrizeWinner[] {
+  const hl = r.highlights as Partial<WeeklyReport["highlights"]> & { winner?: LegacyWinner | null };
+  if (Array.isArray(hl.winners)) return hl.winners;
+  if (!hl.winner) return [];
+  return [{ playerId: hl.winner.uid, name: hl.winner.name, growth: hl.winner.weeklyGrowth, prizeAmount: hl.winner.prize }];
+}
+
+function prizeRule(cfg: GameConfig): string {
+  const growthRule = "Weekly growth = (net worth at close − net worth at week start − that week's allowance) / net worth at week start.";
+  if (cfg.prizeSplitPct.length === 1) return `At weekly close the whole prize pool goes to the player with the highest weekly growth. ${growthRule}`;
+  return `At weekly close the whole prize pool is split among the top ${cfg.prizeSplitPct.length} players by weekly growth (${prizeSplitText(cfg.prizeSplitPct)}). If fewer players qualify, their shares are scaled up so the whole pool is still paid out. ${growthRule}`;
+}
+
 export function mechanicsExplainer(cfg: GameConfig): string {
   return [
     "Stonker is a play-money game for a friend group. Every player is both a trader and a listed stock named after them.",
     "Players trade each other's stock (never their own) against an automated market maker: each stock has a pool of cash C and shares S, price = C / S, and C × S stays constant during a trade. Buying adds cash to the pool and removes shares (price rises); selling does the reverse (price falls). Bigger trades move the price proportionally more. Fractional shares are allowed.",
-    `Every trade pays a ${pct(cfg.tradingFeePct)} fee into a prize pool. At weekly close the whole prize pool goes to the player with the highest weekly growth, computed as (net worth at close − net worth at week start − that week's allowance) / net worth at week start.`,
+    `Every trade pays a ${pct(cfg.tradingFeePct)} fee into a prize pool. ${prizeRule(cfg)}`,
     `Prices move only through trades. Posts and reactions in the feed never move prices directly; players decide whether a post is worth trading on, and stories may be made up.`,
-    `Money in: founders start with ${gbp(cfg.baseStartingCash)}; later joiners start with that plus ${gbp(cfg.weeklyAllowance)} per week already elapsed. Each active player gets a ${gbp(cfg.weeklyAllowance)} weekly allowance and a CEO bonus of ${pct(cfg.bonusRate)} of the value of their stock held by other players. Money out: trading fees (recycled to the winner).`,
+    `Money in: founders start with ${gbp(cfg.baseStartingCash)}; later joiners start with that plus ${gbp(cfg.weeklyAllowance)} per week already elapsed. Each active player gets a ${gbp(cfg.weeklyAllowance)} weekly allowance and a CEO bonus of ${pct(cfg.bonusRate)} of the value of their stock held by other players. Money out: trading fees (recycled to the weekly prize winners).`,
     `Pool depth tracks wealth: pools are sized so a trade of ${pct(cfg.targetTradeSize)} of average net worth moves price by about ${pct(cfg.targetImpact)}. Each week, any pool below that target is topped up with cash and shares at the current price (price unchanged). Pools are never shrunk.`,
     `First stocks listed at ${gbp(cfg.baseStockPrice)}; later stocks list at the median current price. Players inactive for ${cfg.idleThresholdWeeks} weeks become idle: no allowance or bonus, excluded from average net worth and leaderboard ranking; their stock stays tradable. They reactivate on next login or trade.`,
     "Leaderboard score = net worth / (starting cash + allowances received). Everyone starts at 1.00.",
@@ -157,6 +189,7 @@ export function reportToMarkdown(r: Omit<WeeklyReport, "markdown">): string {
   lines.push(`- CEO bonus rate: ${pct(s.bonusRate)}`);
   lines.push(`- Pool depth target: ${pct(s.targetTradeSize)} of avg net worth moves price ${pct(s.targetImpact)} (target pool cash now ${gbp(r.health.targetPoolCash)})`);
   lines.push(`- Base starting cash ${gbp(s.baseStartingCash)}, base stock price ${gbp(s.baseStockPrice)}, idle after ${s.idleThresholdWeeks} weeks`);
+  lines.push(`- Weekly prize split: ${prizeSplitText(s.prizeSplitPct)}`);
   lines.push("");
   lines.push("## Money");
   const m = r.money;
@@ -201,7 +234,14 @@ export function reportToMarkdown(r: Omit<WeeklyReport, "markdown">): string {
   lines.push("");
   lines.push("## Highlights");
   const hl = r.highlights;
-  lines.push(hl.winner ? `- Weekly prize: **${hl.winner.name}** with ${pct(hl.winner.weeklyGrowth)} growth, won ${gbp(hl.winner.prize)}` : "- Weekly prize: no eligible winner");
+  if (hl.winners.length === 0) {
+    lines.push("- Weekly prize: no eligible winner; the prize pool rolls over");
+  } else {
+    lines.push(`- Weekly prize (${gbp(r.money.prizePaid)} paid to ${hl.winners.length} winner${hl.winners.length === 1 ? "" : "s"}):`);
+    hl.winners.forEach((w, i) => {
+      lines.push(`  ${i + 1}. **${w.name}** with ${pct(w.growth)} growth, won ${gbp(w.prizeAmount)}`);
+    });
+  }
   lines.push("- Leaderboard:");
   hl.leaderboard.forEach((row, i) => {
     lines.push(`  ${i + 1}. ${row.name}${row.isIdle ? " (idle)" : ""}: score ${row.score.toFixed(3)}, net worth ${gbp(row.netWorth)}`);

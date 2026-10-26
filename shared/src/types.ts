@@ -36,12 +36,18 @@ export interface GameConfig {
   maxShortExposurePct: number;
   /** Weekly borrow fee on the value of each open short, charged at weekly close into the prize pool. */
   shortBorrowFeePct: number;
+  /**
+   * Weekly prize split by weekly-growth rank, e.g. [0.6, 0.25, 0.15] pays 1st/2nd/3rd.
+   * The entries actually used are renormalised to sum to 1, so fewer eligible
+   * players than entries still drains the whole pool.
+   */
+  prizeSplitPct: number[];
 }
 
 export interface GameState {
   /** Current week number, starting at 1. */
   currentWeek: number;
-  /** Accumulated trading fees, paid to the weekly winner. */
+  /** Accumulated trading fees, split among the weekly prize winners. */
   prizePool: number;
   /** Fees collected during the current week (for reports). */
   weekFees: number;

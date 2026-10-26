@@ -94,3 +94,39 @@ export function shortableCapital(cash: number, holdingsValue: number): number {
 export function shortBorrowFee(shares: number, price: number, feePct: number): number {
   return roundMoney(shares * price * feePct);
 }
+
+/**
+ * Net-worth liability of a single open short (Option B: an open short can only
+ * hurt net worth, never help it, so it can't be used to game the leaderboard).
+ *
+ * Opening a short put `openProceeds` of cash into the wallet. To make opening
+ * net-worth-neutral we subtract at least that much back off as a liability.
+ * If the short is underwater (buying back now costs more than received), the
+ * liability is the higher buy-back cost, dragging net worth down. If it's in
+ * profit, the liability is clamped to the proceeds — the paper gain is ignored
+ * until the short is actually closed.
+ *
+ * `closeCostNow` is the live cost to buy the shares back from the pool. When
+ * the pool is too shallow to price a close, pass undefined and we fall back to
+ * the proceeds (neutral), never a gain.
+ */
+export function shortLiability(openProceeds: number, closeCostNow: number | undefined): number {
+  if (closeCostNow === undefined || !Number.isFinite(closeCostNow)) return openProceeds;
+  return Math.max(openProceeds, closeCostNow);
+}
+
+/**
+ * Total net-worth liability across a player's open shorts, using a function
+ * that prices the live buy-back cost per short (or returns undefined when it
+ * can't be priced). Subtract this from cash + holdings for the ranked net worth.
+ */
+export function shortsLiability(
+  shorts: { openProceeds: number }[],
+  closeCostOf: (index: number) => number | undefined,
+): number {
+  let total = 0;
+  shorts.forEach((s, i) => {
+    total += shortLiability(s.openProceeds, closeCostOf(i));
+  });
+  return roundMoney(total);
+}

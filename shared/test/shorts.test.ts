@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { quoteBuy, quoteSell } from "../src/amm";
-import { quoteCloseShort, quoteOpenShort, shortBorrowFee, shortUnrealised, shortableCapital } from "../src/shorts";
+import { quoteCloseShort, quoteOpenShort, shortBorrowFee, shortLiability, shortsLiability, shortUnrealised, shortableCapital } from "../src/shorts";
 
 const pool = { poolCash: 4000, poolShares: 80 }; // price £50
 
@@ -74,5 +74,40 @@ describe("helpers", () => {
   });
   it("borrow fee is a fraction of the short's current value", () => {
     expect(shortBorrowFee(10, 50, 0.02)).toBeCloseTo(10, 9);
+  });
+});
+
+describe("net-worth liability (Option B: an open short never helps net worth)", () => {
+  it("offsets the proceeds exactly when the short is in profit (neutral)", () => {
+    // Received £440, now costs only £300 to close (in profit). Liability clamps to £440,
+    // so net worth is unchanged from before the short — the paper gain is ignored.
+    expect(shortLiability(440, 300)).toBe(440);
+  });
+
+  it("uses the higher buy-back cost when underwater (drags net worth down)", () => {
+    // Received £440, now costs £600 to close (underwater). Liability is £600,
+    // so net worth = cash(+440) − 600 = −160 vs before: a real loss shows.
+    expect(shortLiability(440, 600)).toBe(600);
+  });
+
+  it("falls back to proceeds (neutral) when the close can't be priced", () => {
+    expect(shortLiability(440, undefined)).toBe(440);
+    expect(shortLiability(440, Number.NaN)).toBe(440);
+  });
+
+  it("sums liabilities across several open shorts", () => {
+    const shorts = [{ openProceeds: 100 }, { openProceeds: 200 }];
+    // first in profit (clamped to 100), second underwater (250)
+    const total = shortsLiability(shorts, (i) => (i === 0 ? 80 : 250));
+    expect(total).toBe(350);
+  });
+
+  it("opening then marking neutral means net worth doesn't move", () => {
+    // Before: cash 1000, no shorts → NW 1000.
+    // Open a short: received 440 (cash 1440), liability 440 → NW 1000. Unchanged.
+    const proceeds = 440;
+    const cashAfter = 1000 + proceeds;
+    const nw = cashAfter - shortLiability(proceeds, 440);
+    expect(nw).toBe(1000);
   });
 });

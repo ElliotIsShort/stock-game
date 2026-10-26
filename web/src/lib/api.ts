@@ -1,7 +1,7 @@
 "use client";
 
 import { httpsCallable } from "firebase/functions";
-import type { GameConfig, Post, ReactionType, Short, Trade, TradeSide } from "@fsm/shared";
+import type { GameConfig, Post, PrizeWinner, ReactionType, Short, Trade, TradeSide } from "@fsm/shared";
 import { fb } from "./firebase";
 
 async function call<Req, Res>(name: string, data: Req): Promise<Res> {
@@ -27,7 +27,7 @@ export const api = {
   delistPlayer: (uid: string) => call<{ uid: string }, { payouts: { uid: string; cash: number }[] }>("delistPlayer", { uid }),
   updateConfig: (patch: Partial<GameConfig>) => call<{ patch: Partial<GameConfig> }, GameConfig>("updateConfig", { patch }),
   runWeeklyClose: (expectedWeek: number) =>
-    call<{ expectedWeek: number }, { closed: boolean; week?: number; winner?: string | null; prize?: number; reason?: string }>(
+    call<{ expectedWeek: number }, { closed: boolean; week?: number; winners?: PrizeWinner[]; prize?: number; reason?: string }>(
       "runWeeklyClose",
       { expectedWeek },
     ),

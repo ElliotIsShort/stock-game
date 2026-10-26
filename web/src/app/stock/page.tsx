@@ -12,6 +12,7 @@ import { TradePanel } from "@/components/TradePanel";
 import { ShortPanel } from "@/components/ShortPanel";
 import { Avatar } from "@/components/Avatar";
 import { PhotoEditor } from "@/components/PhotoEditor";
+import { DonutChart } from "@/components/DonutChart";
 import { api, errorMessage } from "@/lib/api";
 import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
@@ -115,6 +116,16 @@ function StockView() {
         <h2>Holders</h2>
         {holders.length === 0 ? (
           <p className="muted">Nobody holds {stock.displayName} yet.</p>
+        ) : holders.length > 1 ? (
+          <DonutChart
+            label={`Who owns ${stock.displayName}`}
+            centreLabel="Held by players"
+            slices={holders.map((h) => ({
+              id: h.uid,
+              label: `${playerById.get(h.uid)?.displayName ?? "Unknown"}${h.uid === me?.uid ? " (you)" : ""}`,
+              value: h.shares * stock.price,
+            }))}
+          />
         ) : (
           <ul className="plain">
             {holders.map((h) => (

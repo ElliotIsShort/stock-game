@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { gbp } from "@/lib/format";
 import { useGame } from "./GameProvider";
 import { SignIn } from "./SignIn";
 import { RegistrationGate } from "./Registration";
 import { AccountMenu } from "./AccountMenu";
+import { AnimatedNumber } from "./AnimatedNumber";
 
 const NAV = [
   { href: "/", label: "Feed" },
@@ -37,7 +37,22 @@ export function Shell({ children }: { children: ReactNode }) {
     return <main className="page"><p className="muted" aria-live="polite">Loading…</p></main>;
   }
   if (!g.user) return <main className="page"><SignIn /></main>;
-  if (!g.isMember) return <main className="page"><RegistrationGate /></main>;
+
+  const previewBanner = g.previewingAsPlayer && (
+    <div className="banner preview-banner" role="status">
+      <span>Viewing as a player: admin tools are hidden.</span>
+      <button type="button" className="link" onClick={() => g.setPreviewAsPlayer(false)}>Exit player view</button>
+    </div>
+  );
+
+  if (!g.isMember) {
+    return (
+      <>
+        {previewBanner}
+        <main className="page"><RegistrationGate /></main>
+      </>
+    );
+  }
 
   const nav = g.isAdmin ? [...NAV, { href: "/admin/", label: "Admin" }] : NAV;
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
@@ -59,13 +74,14 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="me">
           {me && (
             <span title="Cash / net worth">
-              {gbp(me.cash)} <span className="muted">/ {gbp(me.netWorth)}</span>
+              <AnimatedNumber value={me.cash} /> <span className="muted">/ <AnimatedNumber value={me.netWorth} /></span>
             </span>
           )}
           {g.state && <span className="muted me-week">Week {g.state.currentWeek}</span>}
           <AccountMenu />
         </div>
       </header>
+      {previewBanner}
       {g.me && !g.me.isActive && <div className="banner">Your stock has been delisted. You can browse but not trade.</div>}
       <main className="page">{children}</main>
     </>

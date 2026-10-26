@@ -310,8 +310,30 @@ Firestore live and writes only through callable functions.
 
 **Components:** `Feed`, `TradePanel` (live AMM preview using the shared quote
 functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
-`Avatar`, `LineChart` / `PriceChart`, `SlidePagination`, `AccountMenu`,
+`Avatar`, `LineChart` / `PriceChart`, `BarChart`, `DonutChart` + `Gauge`,
+`StatCard` + `Sparkline`, `AnimatedNumber`, `SlidePagination`, `AccountMenu`,
 `SimpleMarkdown`, `SignIn`, `Registration`.
+
+**Where the charts are used**
+| Screen | Visual |
+|---|---|
+| Top bar | Cash / net worth as `AnimatedNumber` (counts to new values, flashes green/red). |
+| `/portfolio` | `StatCard` row (net worth has a sparkline from `netWorthHistory`); "Where your money is" `DonutChart` (cash + each holding; shorts deliberately excluded); net-worth `LineChart`; per-holding `LineChart` with cost basis. |
+| `/stock` | Price `LineChart`; "Who owns X" `DonutChart` when 2+ players hold it (single holder falls back to a list); `ShortPanel` `Gauge` of short exposure vs. limit, with a lighter preview segment for the short you're typing. |
+| `/reports` | Market index `LineChart` (each close's `prices.index` + a live value = mean(price ÷ listPrice) × 100); "Money flow" grouped `BarChart` of allowances / CEO bonuses / fees for the last 12 weeks, with legend toggles. Both come from the reports already loaded for the list — no extra reads. |
+
+`useTweened` (`lib/hooks.ts`) is the shared rAF tween behind the bars, donut
+arcs, gauge and animated numbers.
+
+**Admin "View as player".** `GameProvider` exposes `isAdmin` (show admin UI),
+`isRealAdmin` (has an `admins/{uid}` doc) and `previewingAsPlayer` /
+`setPreviewAsPlayer`. While previewing, `isAdmin` is false everywhere, so the
+Admin nav link, post delete, admin photo removal and the Admin page disappear;
+an admin with no player account sees the registration screen a new signup
+would. It's remembered in `sessionStorage` for the tab. Toggle it from the
+Admin page button or the account menu; a banner offers "Exit player view".
+**UI only:** the server still treats them as an admin. New admin-only UI must
+check `isAdmin`, never `isRealAdmin`, or it will leak into the preview.
 
 **UI conventions.** No UI framework, no Tailwind, no animation library: all
 styling is plain CSS in `app/globals.css` using the `--bg/--panel/--accent/--up/--down`

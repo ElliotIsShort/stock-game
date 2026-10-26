@@ -47,6 +47,59 @@ export function prefersReducedMotion(): boolean {
 }
 
 /**
+ * Smoothly animate between successive values of `target` (e.g. bar heights,
+ * a balance). The first render shows the target as-is; later changes tween
+ * from whatever is on screen, so rapid updates never jump. A change of length
+ * snaps instead of tweening.
+ */
+export function useTweened(target: number[], ms = 450): number[] {
+  const fromRef = useRef(target);
+  const toRef = useRef(target);
+  const progRef = useRef(1);
+  const [, setFrame] = useState(0);
+  const mounted = useRef(false);
+  const key = target.join(",");
+
+  const current = () => {
+    const from = fromRef.current;
+    const to = toRef.current;
+    const p = progRef.current;
+    if (p >= 1 || from.length !== to.length) return to;
+    return to.map((v, i) => from[i] + (v - from[i]) * p);
+  };
+
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const shown = current();
+    toRef.current = target;
+    if (shown.length !== target.length || prefersReducedMotion()) {
+      fromRef.current = target;
+      progRef.current = 1;
+      setFrame((f) => f + 1);
+      return;
+    }
+    fromRef.current = shown;
+    progRef.current = 0;
+    let frame = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const x = Math.min(1, (now - start) / ms);
+      progRef.current = 1 - (1 - x) ** 3;
+      setFrame((f) => f + 1);
+      if (x < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, ms]);
+
+  return current();
+}
+
+/**
  * Position a sliding "active" indicator under whichever child matches
  * `activeSelector` inside the returned ref's element (which must be
  * position: relative). `animate` is false for the first placement so the

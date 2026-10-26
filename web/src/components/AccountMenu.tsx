@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { gbp, stockHref } from "@/lib/format";
 import { Avatar } from "./Avatar";
@@ -18,6 +18,7 @@ import { useGame } from "./GameProvider";
 export function AccountMenu() {
   const g = useGame();
   const path = usePathname();
+  const router = useRouter();
   const menuId = useId();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -49,6 +50,14 @@ export function AccountMenu() {
       (which === "first" ? list[0] : list[list.length - 1])?.focus();
     });
   };
+
+  function togglePreview() {
+    const next = !g.previewingAsPlayer;
+    g.setPreviewAsPlayer(next);
+    setOpen(false);
+    // The admin page is empty for players, so leave it when switching to the player view.
+    if (next && path.startsWith("/admin")) router.push("/");
+  }
 
   function close(returnFocus: boolean) {
     setOpen(false);
@@ -136,6 +145,12 @@ export function AccountMenu() {
           <MenuLink href={stockHref(me.uid)} onSelect={() => setOpen(false)} hint="Price, holders and your photo">
             My stock
           </MenuLink>
+        )}
+        {g.isRealAdmin && (
+          <button type="button" role="menuitem" className="account-item" onClick={togglePreview}>
+            <span>{g.previewingAsPlayer ? "Exit player view" : "View as player"}</span>
+            <span className="muted small">{g.previewingAsPlayer ? "Show admin tools again" : "Hide admin tools to see what players see"}</span>
+          </button>
         )}
         <MenuLink href="/rules/" onSelect={() => setOpen(false)}>Rules</MenuLink>
         <MenuLink href="/changelog/" onSelect={() => setOpen(false)}>Change log</MenuLink>

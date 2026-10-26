@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { doc } from "firebase/firestore";
 import { CONFIG_BOUNDS, DEFAULT_CHANGELOG, DEFAULT_RULES, type AuditEntry, type GameConfig, type Registration, type SiteContent } from "@fsm/shared";
@@ -11,11 +12,24 @@ import { api, errorMessage } from "@/lib/api";
 import { ago, gbp } from "@/lib/format";
 
 export default function AdminPage() {
-  const { isAdmin } = useGame();
+  const { isAdmin, setPreviewAsPlayer } = useGame();
+  const router = useRouter();
   if (!isAdmin) return <p className="muted">Admins only.</p>;
   return (
     <div className="stack">
-      <h1>Admin</h1>
+      <div className="row between wrap">
+        <h1>Admin</h1>
+        <button
+          type="button"
+          title="Hide admin tools and browse as a player. Undo from the banner or the account menu."
+          onClick={() => {
+            setPreviewAsPlayer(true);
+            router.push("/");
+          }}
+        >
+          View as player
+        </button>
+      </div>
       <Approvals />
       <Players />
       <WeeklyClose />

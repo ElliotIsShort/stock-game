@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
 import { positionFromTrades, quoteCloseShort, shortUnrealised, type NetWorthHistory, type Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { LineChart } from "@/components/LineChart";
+import { DonutChart } from "@/components/DonutChart";
+import { StatCard } from "@/components/StatCard";
 import { fb } from "@/lib/firebase";
 import { useDoc, useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
@@ -61,10 +63,15 @@ export default function PortfolioPage() {
       <h1>Portfolio</h1>
       {me.isIdle && <div className="banner">You&apos;re marked idle — you&apos;ll reactivate automatically now you&apos;re back.</div>}
       <div className="stats">
-        <Stat label="Cash" value={gbp(me.cash)} />
-        <Stat label="Holdings" value={gbp(view?.holdingsValue)} sub={<span className={changeClass(totalUnrealised)}>{totalUnrealised >= 0 ? "+" : ""}{gbp(totalUnrealised)} unrealised</span>} />
-        <Stat label="Net worth" value={gbp(view?.netWorth)} sub={<span className={changeClass(weekChange)}>{pct(weekChange)} this week</span>} />
-        <Stat label="Score" value={(view?.score ?? 0).toFixed(3)} sub="net worth ÷ (start + allowances)" />
+        <StatCard label="Cash" value={me.cash} />
+        <StatCard label="Holdings" value={view?.holdingsValue ?? 0} sub={<span className={changeClass(totalUnrealised)}>{totalUnrealised >= 0 ? "+" : ""}{gbp(totalUnrealised)} unrealised</span>} />
+        <StatCard
+          label="Net worth"
+          value={view?.netWorth ?? 0}
+          sub={<span className={changeClass(weekChange)}>{pct(weekChange)} this week</span>}
+          spark={nwPoints.map((p) => p.v)}
+        />
+        <StatCard label="Score" value={view?.score ?? 0} format={(n) => n.toFixed(3)} sub="net worth ÷ (start + allowances)" />
       </div>
 
       <section className="card">
@@ -75,6 +82,24 @@ export default function PortfolioPage() {
           <LineChart points={nwPoints} label="Your net worth over time" ranges={["1M", "3M", "1Y"]} />
         )}
       </section>
+
+      {(view?.netWorth ?? 0) > 0 && (
+        <section className="card">
+          <h2>Where your money is</h2>
+          <DonutChart
+            label="Your net worth by holding"
+            centreLabel="Net worth"
+            slices={[
+              { id: "cash", label: "Cash", value: Math.max(0, me.cash), color: "#6e7681" },
+              ...myHoldings.map((h) => {
+                const s = stockById.get(h.stockId);
+                return { id: h.stockId, label: s?.displayName ?? "Unknown", value: s ? h.shares * s.price : 0 };
+              }),
+            ]}
+          />
+          {myShorts.length > 0 && <p className="small muted">Open shorts aren&apos;t shown here: they&apos;re a buy-back you owe, not something you own.</p>}
+        </section>
+      )}
 
       <section className="card">
         <h2>Holdings</h2>
@@ -247,15 +272,5 @@ function HoldingRow({ stockId, trades }: { stockId: string; trades: Trade[] }) {
         </tr>
       )}
     </>
-  );
-}
-
-function Stat({ label, value, sub }: { label: string; value: string; sub?: ReactNode }) {
-  return (
-    <div className="stat">
-      <div className="muted small">{label}</div>
-      <div className="big">{value}</div>
-      {sub && <div className="small muted">{sub}</div>}
-    </div>
   );
 }

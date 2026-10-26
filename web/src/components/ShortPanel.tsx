@@ -5,6 +5,7 @@ import { quoteCloseShort, quoteOpenShort, shortUnrealised, type Stock } from "@f
 import { api, errorMessage } from "@/lib/api";
 import { changeClass, gbp, pct, shares as fmtShares } from "@/lib/format";
 import { useGame } from "./GameProvider";
+import { Gauge } from "./DonutChart";
 
 /**
  * Open a short on this stock, and manage any open shorts you hold on it.
@@ -12,7 +13,7 @@ import { useGame } from "./GameProvider";
  * closing buys them back. You profit if the price fell. Capped by your capital.
  */
 export function ShortPanel({ stock }: { stock: Stock }) {
-  const { me, config, myShorts, players } = useGame();
+  const { me, config, myShorts, players, stockById } = useGame();
   const [shares, setShares] = useState("");
   const [openPost, setOpenPost] = useState("");
   const [closePostFor, setClosePostFor] = useState<string | null>(null);
@@ -41,6 +42,9 @@ export function ShortPanel({ stock }: { stock: Stock }) {
   const meView = players.find((p) => p.uid === me.uid);
   const capital = me.cash + (meView?.holdingsValue ?? 0);
   const limit = capital * config.maxShortExposurePct;
+  // Current exposure across all your open shorts, valued at today's prices (same rule as the server).
+  const exposure = myShorts.reduce((sum, s) => sum + s.shares * (stockById.get(s.stockId)?.price ?? 0), 0);
+  const exposureAfter = openQuote ? exposure + value * openQuote.priceAfter : undefined;
 
   async function openShort(e: FormEvent) {
     e.preventDefault();
@@ -84,6 +88,7 @@ export function ShortPanel({ stock }: { stock: Stock }) {
         Bet the price will fall: sell shares you don&apos;t own now, buy them back later. You profit if it drops. A {pct(config.shortBorrowFeePct)} fee
         is charged each week you keep it open. You can short up to {pct(config.maxShortExposurePct)} of your capital — about {gbp(limit)}.
       </p>
+      <Gauge label="Short limit used" value={exposure} max={limit} preview={exposureAfter} />
 
       {mineOnThis.length > 0 && (
         <div className="stack">

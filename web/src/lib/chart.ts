@@ -91,6 +91,10 @@ export function nearestIndex(points: ChartPoint[], t: number): number {
   return best;
 }
 
+export function easeOut(x: number): number {
+  return 1 - (1 - x) ** 3;
+}
+
 /** Ease in-out (matches easyui's [0.77, 0, 0.175, 1] feel closely enough without a bezier solver). */
 export function easeInOut(x: number): number {
   return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;

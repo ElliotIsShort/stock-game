@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { collection, doc, query, where } from "firebase/firestore";
 import {
@@ -33,7 +33,13 @@ interface GameContextValue {
   user: User | null;
   registration: Registration | null;
   me: Player | null;
+  /** Show admin UI. False while an admin is previewing the site as a player. */
   isAdmin: boolean;
+  /** Has an admins/{uid} doc, regardless of preview. Only use this for the preview toggle itself. */
+  isRealAdmin: boolean;
+  /** An admin is currently viewing the site as a player. */
+  previewingAsPlayer: boolean;
+  setPreviewAsPlayer: (on: boolean) => void;
   isMember: boolean;
   loadingMembership: boolean;
   signOut: () => Promise<void>;
@@ -53,6 +59,7 @@ interface GameContextValue {
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
+const PREVIEW_KEY = "fsm:viewAsPlayer";
 
 export function useGame(): GameContextValue {
   const ctx = useContext(GameContext);
@@ -80,7 +87,21 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const adminDoc = useDoc<object>(db && uid ? doc(db, "admins", uid) : null, [uid]);
   const meDoc = useDoc<Player>(db && uid ? doc(db, "players", uid) : null, [uid]);
 
-  const isAdmin = Boolean(adminDoc.data);
+  // "View as player": admins can hide every admin affordance to see what players see.
+  // UI-only — the server still treats them as an admin. Remembered for the browser tab.
+  const realAdmin = Boolean(adminDoc.data);
+  const [previewAsPlayer, setPreviewState] = useState(false);
+  useEffect(() => {
+    setPreviewState(sessionStorage.getItem(PREVIEW_KEY) === "1");
+  }, []);
+  const setPreviewAsPlayer = useCallback((on: boolean) => {
+    if (on) sessionStorage.setItem(PREVIEW_KEY, "1");
+    else sessionStorage.removeItem(PREVIEW_KEY);
+    setPreviewState(on);
+  }, []);
+  const previewing = realAdmin && previewAsPlayer;
+  const isAdmin = realAdmin && !previewing;
+  // An admin with no player account previews what a not-yet-approved signup sees.
   const isMember = Boolean(meDoc.data) || isAdmin;
   const loadingMembership = registration.loading || adminDoc.loading || meDoc.loading;
   const liveDb = db && isMember ? db : null;
@@ -136,6 +157,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       registration: registration.data,
       me: meDoc.data,
       isAdmin,
+      isRealAdmin: realAdmin,
+      previewingAsPlayer: previewing,
+      setPreviewAsPlayer,
       isMember,
       loadingMembership,
       signOut: () => signOut(fb().auth),
@@ -150,7 +174,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       myShorts: myShortsQ.data,
       photoOf: (id: string) => photoById.get(id),
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, myShortsQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, myShortsQ.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

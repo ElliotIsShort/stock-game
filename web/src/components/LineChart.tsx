@@ -29,6 +29,8 @@ export function LineChart(props: {
   height?: number;
   /** Range keys to offer, from RANGE_OPTIONS. "All" is always added. */
   ranges?: string[];
+  /** Value formatter; defaults to £. Pass one for non-money series (e.g. an index). */
+  format?: (n: number) => string;
 }) {
   if (props.points.length < 2) return <p className="muted small">Not enough data to chart yet.</p>;
   return <InteractiveChart {...props} />;
@@ -75,6 +77,7 @@ function InteractiveChart({
   baselineLabel,
   height = 220,
   ranges = ["1W", "1M", "3M"],
+  format,
 }: {
   points: ChartPoint[];
   label: string;
@@ -83,7 +86,10 @@ function InteractiveChart({
   baselineLabel?: string;
   height?: number;
   ranges?: string[];
+  format?: (n: number) => string;
 }) {
+  const fmt = format ?? gbp;
+  const axisFmt = format ?? ((v: number) => compact.format(v));
   const uid = useId().replace(/:/g, "");
   const sorted = useMemo(() => [...points].sort((a, b) => a.t - b.t), [points]);
   const rangeKeys = ranges.join(",");
@@ -283,7 +289,7 @@ function InteractiveChart({
     <figure className="ichart">
       <div className="ichart-head">
         <div>
-          <p className="ichart-value">{gbp(shown.v)}</p>
+          <p className="ichart-value">{fmt(shown.v)}</p>
           <p className="small">
             <span className={changeClass(delta)}>{pct(delta)}</span>{" "}
             <span className="muted">{hover !== null ? tip.format(shown.t) : rangeText}</span>
@@ -315,7 +321,7 @@ function InteractiveChart({
               height={height}
               role="img"
               tabIndex={0}
-              aria-label={`${label}, ${rangeText}: from ${gbp(first.v)} to ${gbp(last.v)}. Use the left and right arrow keys to inspect values.`}
+              aria-label={`${label}, ${rangeText}: from ${fmt(first.v)} to ${fmt(last.v)}. Use the left and right arrow keys to inspect values.`}
               style={{ color: trendUp ? "var(--up)" : "var(--down)" }}
               onKeyDown={onKeyDown}
               onBlur={() => hoverAt(null)}
@@ -338,7 +344,7 @@ function InteractiveChart({
                     <g key={v}>
                       <line x1={PAD.l} x2={width - PAD.r} y1={y} y2={y} className="ichart-grid" />
                       <text x={PAD.l - 8} y={y} textAnchor="end" dominantBaseline="middle">
-                        {compact.format(v)}
+                        {axisFmt(v)}
                       </text>
                     </g>
                   );
@@ -390,7 +396,8 @@ function InteractiveChart({
                 style={{ touchAction: "pan-y", cursor: "crosshair" }}
                 onPointerDown={onScrub}
                 onPointerMove={onScrub}
-                onPointerLeave={() => hoverAt(null)}
+                // On touch, keep the last reading after you lift your finger; it clears on blur or the next touch.
+                onPointerLeave={(e) => e.pointerType === "mouse" && hoverAt(null)}
                 onPointerCancel={() => hoverAt(null)}
               />
             </svg>
@@ -401,13 +408,13 @@ function InteractiveChart({
               aria-hidden="true"
             >
               <span className="muted">{tip.format(shown.t)}</span>
-              <strong>{gbp(shown.v)}</strong>
+              <strong>{fmt(shown.v)}</strong>
             </div>
           </>
         )}
       </div>
       <span className="sr-only" aria-live="polite">
-        {fromKeyboard && hover !== null ? `${tip.format(shown.t)}: ${gbp(shown.v)}` : ""}
+        {fromKeyboard && hover !== null ? `${tip.format(shown.t)}: ${fmt(shown.v)}` : ""}
       </span>
     </figure>
   );

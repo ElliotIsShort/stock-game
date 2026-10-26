@@ -18,8 +18,6 @@ Every member of a friend group is a tradable stock. Players trade each other wit
 
 Stock photos live in `photos/{uid}` as small (256 px, ≤200 KB) JPEG data URLs rather than in Cloud Storage, so there's no extra service to enable. They're kept out of `stocks/{uid}` so live price updates don't resend image data.
 
-Adding players and admins: see [docs/adding-a-player.md](docs/adding-a-player.md).
-
 Holdings are stored flat as `holdings/{uid}_{stockId}` (with `uid`/`stockId` fields) rather than nested, so "all holders of a stock" is a single query.
 
 ## Local development

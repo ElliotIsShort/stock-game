@@ -51,7 +51,10 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
 /* On narrow screens, shorten the brand and give the nav the full width below it. */
 @media (max-width: 600px) {
   .topbar { gap: .5rem .75rem; padding: .6rem .9rem; }
-  .topbar nav { order: 3; flex-basis: 100%; }
+  /* One swipeable row rather than wrapping onto several. */
+  .topbar nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -.9rem; padding: 0 .9rem; }
+  .topbar nav::-webkit-scrollbar { display: none; }
+  .topbar nav a { flex-shrink: 0; }
   .me { gap: .75rem; margin-left: auto; font-size: .9rem; }
 }
 
@@ -153,8 +156,108 @@ tr.me-row { background: rgba(88, 166, 255, .08); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; }
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem 1rem; }
 ul.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
-.chart svg { width: 100%; height: auto; display: block; background: var(--bg); border-radius: 6px; }
-.chart { margin: 0; }
+/* Interactive chart (components/LineChart.tsx) */
+.ichart { margin: 0; display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+.ichart-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem 1rem; flex-wrap: wrap; }
+.ichart-head p { margin: 0; font-variant-numeric: tabular-nums; }
+.ichart-value { font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em; }
+.ichart-plot { position: relative; width: 100%; background: var(--bg); border-radius: 6px; overflow: hidden; }
+/* Absolutely positioned so the measured pixel width never props its container open when the viewport shrinks. */
+.ichart-plot svg { position: absolute; left: 0; top: 0; display: block; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; transition: color .3s ease; }
+.ichart-plot svg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ichart-axes { animation: ichart-fade .25s ease-out; }
+.ichart-axes text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ichart-grid { stroke: var(--border); stroke-width: 1; opacity: .6; }
+.ichart-baseline line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.ichart-baseline text { fill: var(--muted); font-size: 10px; }
+.ichart-cursor { opacity: 0; transition: opacity .15s ease-out; }
+.ichart-cursor.on { opacity: 1; }
+.ichart-cursor line { stroke: var(--text); stroke-opacity: .35; stroke-dasharray: 3 3; }
+.ichart-cursor circle { fill: var(--bg); stroke: currentColor; stroke-width: 2; }
+.ichart-cursor.glide > g, .ichart-tip.glide { transition: transform .16s cubic-bezier(.23, 1, .32, 1); }
+.ichart-tip {
+  position: absolute; left: 0; top: 4px; pointer-events: none; opacity: 0; transition: opacity .15s ease-out;
+  display: flex; flex-direction: column; padding: .3rem .55rem; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  font-size: .78rem; line-height: 1.25; font-variant-numeric: tabular-nums;
+}
+.ichart-tip.on { opacity: 1; }
+.ichart-tip.glide { transition: transform .16s cubic-bezier(.23, 1, .32, 1), opacity .15s ease-out; }
+@keyframes ichart-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Sliding "active" indicator shared by range pills and pagination (lib/hooks useSlideIndicator). */
+.slide-indicator { position: absolute; left: 0; top: 0; pointer-events: none; list-style: none; }
+.slide-indicator.animate { transition: transform .28s cubic-bezier(.34, 1.3, .64, 1), width .28s cubic-bezier(.34, 1.3, .64, 1); }
+
+.range-pills { position: relative; display: inline-flex; padding: 2px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); }
+.range-pills .slide-indicator { border-radius: 999px; background: var(--panel-2); box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+.range-pills button {
+  position: relative; z-index: 1; background: none; border: none; border-radius: 999px;
+  padding: .25rem .65rem; font-size: .8rem; font-weight: 500; color: var(--muted); min-height: 30px;
+  transition: color .15s ease-out, transform .1s ease-out;
+}
+.range-pills button[aria-pressed="true"] { color: var(--text); }
+.range-pills button:active { transform: scale(.96); }
+
+/* Pagination (components/SlidePagination.tsx) */
+.feed { scroll-margin-top: 4.5rem; }
+.feed-pager { display: flex; justify-content: center; padding-top: .25rem; }
+.pager { display: inline-flex; align-items: center; gap: .25rem; user-select: none; }
+.pager ul { position: relative; display: flex; align-items: center; gap: .25rem; list-style: none; margin: 0; padding: 0; }
+.pager .slide-indicator { border-radius: 6px; background: var(--accent); }
+.pager button, .pager-gap {
+  min-width: 2.25rem; height: 2.25rem; padding: 0 .4rem; display: inline-flex; align-items: center; justify-content: center;
+  font-size: .85rem; font-variant-numeric: tabular-nums;
+}
+.pager ul button { position: relative; z-index: 1; background: none; border-color: transparent; color: var(--muted); transition: color .15s ease-out; }
+.pager ul button:hover:not([aria-current]) { color: var(--text); background: var(--panel-2); }
+.pager ul button[aria-current="page"] { color: #07111f; font-weight: 600; }
+.pager-step { color: var(--muted); }
+.pager-gap { color: var(--muted); }
+
+/* Account menu (components/AccountMenu.tsx) */
+.account { position: relative; }
+.account-trigger {
+  display: inline-flex; align-items: center; gap: .45rem; padding: .2rem .45rem .2rem .2rem; border-radius: 999px;
+  background: var(--panel-2); min-height: 36px;
+}
+.account-name { max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
+.account-chevron { color: var(--muted); transition: transform .2s cubic-bezier(.23, 1, .32, 1); }
+.account-trigger[aria-expanded="true"] .account-chevron { transform: rotate(180deg); }
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + .5rem); z-index: 20;
+  width: min(17rem, calc(100vw - 1.5rem)); padding: .35rem; border-radius: var(--radius);
+  background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+  display: flex; flex-direction: column;
+  transform-origin: top right; opacity: 0; visibility: hidden; transform: translateY(-8px) scale(.96);
+  transition: opacity .14s ease-out, transform .18s cubic-bezier(.23, 1, .32, 1), visibility 0s linear .18s;
+}
+.account-menu[data-open] { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+.account-head { display: flex; align-items: center; gap: .65rem; padding: .5rem .55rem; min-width: 0; }
+.account-head > div { min-width: 0; }
+.account-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-facts { display: grid; grid-template-columns: auto 1fr; gap: .15rem .75rem; margin: 0; padding: 0 .55rem .5rem; font-variant-numeric: tabular-nums; }
+.account-facts dt { color: var(--muted); }
+.account-facts dd { margin: 0; text-align: right; }
+.account-sep { height: 1px; background: var(--border); margin: .3rem 0; }
+.account-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: .05rem; width: 100%; text-align: left;
+  padding: .55rem .6rem; border-radius: 6px; border: none; background: none; color: var(--text); font-size: .95rem; min-height: 40px;
+}
+a.account-item:hover, button.account-item:hover, .account-item:focus-visible { background: var(--panel-2); text-decoration: none; }
+.account-item:focus-visible { outline-offset: -2px; }
+.account-item.danger { color: var(--down); }
+.account-item.disabled { opacity: .5; cursor: not-allowed; }
+
+@media (max-width: 600px) {
+  .account-name, .me-week { display: none; }
+  .feed { scroll-margin-top: 7rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ichart-axes { animation: none; }
+  .ichart-cursor.glide > g, .ichart-tip.glide, .slide-indicator.animate, .account-menu, .account-chevron, .range-pills button { transition: none; }
+}
 .report-md { white-space: pre-wrap; font-size: .85rem; background: var(--bg); padding: 1rem; border-radius: 6px; overflow-x: auto; max-height: 600px; }
 .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; align-items: start; }
 .audit pre { font-size: .8rem; background: var(--bg); padding: .5rem; border-radius: 6px; overflow-x: auto; }

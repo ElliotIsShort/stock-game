@@ -1,36 +1,69 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { REACTION_EMOJI, REACTION_TYPES, type Post, type ReactionType, type Trade } from "@fsm/shared";
 import { fb } from "@/lib/firebase";
-import { useQuery } from "@/lib/hooks";
+import { prefersReducedMotion, useMediaQuery, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
+import { feedCutoff } from "@/lib/pagination";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
 import { PostComposer } from "./PostComposer";
+import { SlidePagination } from "./SlidePagination";
 
 type Item = { kind: "trade"; at: number; trade: Trade } | { kind: "post"; at: number; post: Post };
 
-/** One chronological feed of trades and posts (§7). Optionally scoped to one stock. */
-export function Feed({ stockId, pageSize = 60 }: { stockId?: string; pageSize?: number }) {
+/** One chronological feed of trades and posts (§7), paginated. Optionally scoped to one stock. */
+export function Feed({ stockId, pageSize = 15 }: { stockId?: string; pageSize?: number }) {
+  // Remount per stock so page and query limits reset when you switch stocks.
+  return <PagedFeed key={stockId ?? "all"} stockId={stockId} pageSize={pageSize} />;
+}
+
+/**
+ * Trades and posts are two newest-first queries merged on the client. Each
+ * query loads enough for the current page plus one page of lookahead, so we
+ * always know whether a next page exists without counting the collections.
+ * Limits only ever grow, so flipping back to earlier pages costs no re-reads.
+ */
+function PagedFeed({ stockId, pageSize }: { stockId?: string; pageSize: number }) {
   const db = fb().db;
-  const [size, setSize] = useState(pageSize);
+  const [page, setPage] = useState(1);
+  const want = (page + 1) * pageSize;
+  const [tradeLimit, setTradeLimit] = useState(want);
+  const [postLimit, setPostLimit] = useState(want);
+  useEffect(() => {
+    setTradeLimit((l) => Math.max(l, want));
+    setPostLimit((l) => Math.max(l, want));
+  }, [want]);
+
   const tradesQ = useQuery<Trade>(
     stockId
-      ? query(collection(db, "trades"), where("stockId", "==", stockId), orderBy("createdAt", "desc"), limit(size))
-      : query(collection(db, "trades"), orderBy("createdAt", "desc"), limit(size)),
-    [stockId, size],
+      ? query(collection(db, "trades"), where("stockId", "==", stockId), orderBy("createdAt", "desc"), limit(tradeLimit))
+      : query(collection(db, "trades"), orderBy("createdAt", "desc"), limit(tradeLimit)),
+    [stockId, tradeLimit],
   );
   const postsQ = useQuery<Post>(
     stockId
-      ? query(collection(db, "posts"), where("taggedStockId", "==", stockId), orderBy("createdAt", "desc"), limit(size))
-      : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(size)),
-    [stockId, size],
+      ? query(collection(db, "posts"), where("taggedStockId", "==", stockId), orderBy("createdAt", "desc"), limit(postLimit))
+      : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(postLimit)),
+    [stockId, postLimit],
   );
 
+  // Compare against the limit each snapshot was fetched with, not a limit we've just raised but not loaded yet.
+  const tradesFetchedWith = useFetchedLimit(tradesQ.data, tradeLimit);
+  const postsFetchedWith = useFetchedLimit(postsQ.data, postLimit);
+  // A query that hasn't returned anything yet holds the whole feed back (cutoff = ∞).
+  const tradesTruncated = (tradesQ.loading && tradesQ.data.length === 0) || tradesQ.data.length >= tradesFetchedWith;
+  const postsTruncated = (postsQ.loading && postsQ.data.length === 0) || postsQ.data.length >= postsFetchedWith;
+  const { cutoff, limiting } = feedCutoff([
+    { oldest: tradesQ.data.at(-1)?.createdAt ?? null, truncated: tradesTruncated },
+    { oldest: postsQ.data.at(-1)?.createdAt ?? null, truncated: postsTruncated },
+  ]);
+
+  // Only the prefix newer than the cutoff is complete; older items may be missing from a truncated query.
   const items = useMemo<Item[]>(() => {
     const postIds = new Set(postsQ.data.map((p) => p.id));
     const list: Item[] = [
@@ -40,18 +73,44 @@ export function Feed({ stockId, pageSize = 60 }: { stockId?: string; pageSize?: 
         .filter((t) => !(t.linkedPostId && postIds.has(t.linkedPostId)))
         .map((trade) => ({ kind: "trade" as const, at: trade.createdAt, trade })),
     ];
-    return list.sort((a, b) => b.at - a.at);
-  }, [postsQ.data, tradesQ.data]);
+    return list.filter((it) => it.at >= cutoff).sort((a, b) => b.at - a.at);
+  }, [postsQ.data, tradesQ.data, cutoff]);
+
+  // Not enough complete items for this page + lookahead: extend whichever query is holding the cutoff back.
+  const loading = tradesQ.loading || postsQ.loading;
+  useEffect(() => {
+    if (loading || items.length >= want || limiting === null) return;
+    if (limiting === 0) setTradeLimit((l) => l + pageSize);
+    else setPostLimit((l) => l + pageSize);
+  }, [loading, items.length, want, limiting, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const hasMore = tradesTruncated || postsTruncated;
+  const current = Math.min(page, pageCount);
+  const visible = items.slice((current - 1) * pageSize, current * pageSize);
+
+  // If items disappear (e.g. a post is deleted) and this page no longer exists, step back.
+  useEffect(() => {
+    if (!loading && page > pageCount) setPage(pageCount);
+  }, [loading, page, pageCount]);
+
+  const sectionRef = useRef<HTMLElement>(null);
+  const narrow = useMediaQuery("(max-width: 480px)");
+  function changePage(next: number) {
+    setPage(next);
+    const el = sectionRef.current;
+    // Bring the top of the feed back into view if you've scrolled past it (or it's under the sticky top bar).
+    if (el && el.getBoundingClientRect().top < 64) el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  }
 
   const error = tradesQ.error ?? postsQ.error;
-  const hasMore = tradesQ.data.length >= size || postsQ.data.length >= size;
 
   return (
-    <section aria-label="Feed" className="feed">
+    <section aria-label="Feed" className="feed" ref={sectionRef}>
       {error && <p className="error" role="alert">Couldn&apos;t load the feed: {error.message}</p>}
-      {!tradesQ.loading && !postsQ.loading && items.length === 0 && <p className="muted">Nothing here yet.</p>}
+      {!loading && items.length === 0 && !hasMore && <p className="muted">Nothing here yet.</p>}
       <ul className="feed-list">
-        {items.map((it) =>
+        {visible.map((it) =>
           it.kind === "trade" ? (
             <li key={`t-${it.trade.id}`}><TradeItem trade={it.trade} /></li>
           ) : (
@@ -59,11 +118,27 @@ export function Feed({ stockId, pageSize = 60 }: { stockId?: string; pageSize?: 
           ),
         )}
       </ul>
-      {hasMore && (
-        <button type="button" onClick={() => setSize((s) => s + pageSize)}>Load more</button>
+      {pageCount > 1 && (
+        <div className="feed-pager">
+          <SlidePagination
+            label="Feed pages"
+            pageCount={pageCount}
+            page={current}
+            onChange={changePage}
+            hasMore={hasMore}
+            siblingCount={narrow ? 0 : 1}
+          />
+        </div>
       )}
     </section>
   );
+}
+
+/** The query limit that was in force when this snapshot of `data` arrived. */
+function useFetchedLimit<T>(data: T[], limitNow: number): number {
+  const ref = useRef({ data, limit: limitNow });
+  if (ref.current.data !== data) ref.current = { data, limit: limitNow };
+  return ref.current.limit;
 }
 
 function TradeItem({ trade }: { trade: Trade }) {

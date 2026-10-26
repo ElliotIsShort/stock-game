@@ -136,7 +136,7 @@ function StockView() {
       <section className="stack">
         <h2>Talk about {stock.id === me?.uid ? "yourself" : stock.displayName}</h2>
         <PostComposer defaultTag={stock.id} />
-        <Feed stockId={stock.id} pageSize={30} />
+        <Feed stockId={stock.id} pageSize={10} />
       </section>
     </div>
   );

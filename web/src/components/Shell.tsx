@@ -7,6 +7,7 @@ import { gbp } from "@/lib/format";
 import { useGame } from "./GameProvider";
 import { SignIn } from "./SignIn";
 import { RegistrationGate } from "./Registration";
+import { AccountMenu } from "./AccountMenu";
 
 const NAV = [
   { href: "/", label: "Feed" },
@@ -14,9 +15,8 @@ const NAV = [
   { href: "/portfolio/", label: "Portfolio" },
   { href: "/leaderboard/", label: "Leaderboard" },
   { href: "/reports/", label: "Reports" },
-  { href: "/rules/", label: "Rules" },
-  { href: "/changelog/", label: "Change log" },
 ];
+// Rules and Change log live in the account menu to keep the nav short on phones.
 
 /** App chrome + gatekeeping: signed out → sign in; not approved → registration; else the page. */
 export function Shell({ children }: { children: ReactNode }) {
@@ -62,8 +62,8 @@ export function Shell({ children }: { children: ReactNode }) {
               {gbp(me.cash)} <span className="muted">/ {gbp(me.netWorth)}</span>
             </span>
           )}
-          {g.state && <span className="muted">Week {g.state.currentWeek}</span>}
-          <button type="button" className="link" onClick={g.signOut}>Sign out</button>
+          {g.state && <span className="muted me-week">Week {g.state.currentWeek}</span>}
+          <AccountMenu />
         </div>
       </header>
       {g.me && !g.me.isActive && <div className="banner">Your stock has been delisted. You can browse but not trade.</div>}

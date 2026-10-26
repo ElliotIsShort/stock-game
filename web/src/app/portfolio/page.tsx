@@ -72,7 +72,7 @@ export default function PortfolioPage() {
         {nwPoints.length < 2 ? (
           <p className="muted small">Your net worth is charted after the first weekly close. Check back once a week has closed.</p>
         ) : (
-          <LineChart points={nwPoints} label="Your net worth over time" />
+          <LineChart points={nwPoints} label="Your net worth over time" ranges={["1M", "3M", "1Y"]} />
         )}
       </section>
 
@@ -234,7 +234,14 @@ function HoldingRow({ stockId, trades }: { stockId: string; trades: Trade[] }) {
             {points.length < 2 ? (
               <p className="muted small">Not enough trades to chart this holding yet.</p>
             ) : (
-              <LineChart points={points} label={`Your ${s.displayName} position value over time`} baseline={pos.costBasis} />
+              <LineChart
+                points={points}
+                label={`Your ${s.displayName} position value over time`}
+                baseline={pos.costBasis}
+                baselineLabel="Cost basis"
+                height={180}
+                ranges={["1W", "1M"]}
+              />
             )}
           </td>
         </tr>

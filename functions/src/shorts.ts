@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import type { Transaction } from "firebase-admin/firestore";
 import {
+  priceTick,
   quoteCloseShort,
   quoteOpenShort,
   shortExposure,
@@ -13,6 +14,8 @@ import {
 } from "@fsm/shared";
 import { applyBankruptcySettlement } from "./bankruptcy";
 import { asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { announceTrade } from "./marketEvents";
+import { applyPool } from "./trading";
 
 function shortSummary(s: Pick<Short, "ownerName" | "shares" | "stockName">, action: "opened" | "closed"): string {
   return `${s.ownerName} ${action} a short on ${s.shares.toFixed(2)} shares of ${s.stockName}`;
@@ -67,7 +70,8 @@ export const openShort = onCall(async (req) => {
       throw new HttpsError("failed-precondition", `That would exceed your short limit (${(cfg.maxShortExposurePct * 100).toFixed(0)}% of your £${capital.toFixed(2)} capital).`);
     }
 
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter);
+    const tick = priceTick(stock, q.priceAfter, state.currentWeek);
+    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch);
     tx.update(refs.player(uid), { cash: player.cash + q.proceeds, lastActiveAt: now, isIdle: false });
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
     if (stateExists) tx.update(refs.state(), nextState);
@@ -89,7 +93,9 @@ export const openShort = onCall(async (req) => {
       borrowFeesPaid: 0,
     };
     tx.set(shortRef, short);
-    recordTrade(tx, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText });
+    recordTrade(tx, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText, recentPrices: tick.recentPrices });
+    // A short's size for Discord is the value sold at the pre-trade price.
+    announceTrade(tx, { kind: "openShort", traderName: player.displayName, stock, cash: shares * q.priceBefore, shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
     return short;
   });
 });
@@ -125,7 +131,8 @@ export const closeShort = onCall(async (req) => {
     const q = quoteCloseShort(stock, short.shares, cfg.tradingFeePct);
     const realisedPnl = short.openProceeds - q.cost - short.borrowFeesPaid;
 
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter);
+    const tick = priceTick(stock, q.priceAfter, state.currentWeek);
+    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch);
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
     if (stateExists) tx.update(refs.state(), nextState);
     else tx.set(refs.state(), { ...state, ...nextState });
@@ -138,7 +145,8 @@ export const closeShort = onCall(async (req) => {
       closedAt: now,
       closeWeek: state.currentWeek,
     });
-    recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText });
+    recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText, recentPrices: tick.recentPrices });
+    announceTrade(tx, { kind: "closeShort", traderName: player.displayName, stock, cash: q.cost, shares: short.shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
 
     if (q.cost > player.cash + 1e-6) {
       // Can't afford the buy-back: liquidate holdings and, if still short, go bankrupt.
@@ -147,26 +155,14 @@ export const closeShort = onCall(async (req) => {
       const stocksSnap = await db.collection("stocks").get();
       const stockOf = new Map(stocksSnap.docs.map((d) => [d.id, d.data() as Stock]));
       // The pool change from this close is already staged above; reflect it for liquidation pricing.
-      stockOf.set(stock.id, { ...stock, poolCash: q.newPoolCash, poolShares: q.newPoolShares, price: q.priceAfter });
-      applyBankruptcySettlement(tx, player, debtorHoldings, stockOf, q.cost, [], cfg.tradingFeePct, now);
+      stockOf.set(stock.id, { ...stock, ...tick.patch, poolCash: q.newPoolCash, poolShares: q.newPoolShares, price: q.priceAfter });
+      applyBankruptcySettlement(tx, player, debtorHoldings, stockOf, q.cost, [], cfg.tradingFeePct, now, state.currentWeek);
     } else {
       tx.update(refs.player(uid), { cash: player.cash - q.cost, lastActiveAt: now, isIdle: false });
     }
     return { ...short, status: "closed", closePrice: q.priceAfter, closeCost: q.cost, realisedPnl, closedAt: now };
   });
 });
-
-function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number) {
-  tx.update(refs.stock(stock.id), {
-    poolCash,
-    poolShares,
-    k: poolCash * poolShares,
-    price,
-    weekHigh: Math.max(stock.weekHigh, price),
-    weekLow: Math.min(stock.weekLow, price),
-    weekTradeCount: stock.weekTradeCount + 1,
-  });
-}
 
 /** Record a short open/close in the trades feed, with an optional linked post. */
 function recordTrade(
@@ -185,6 +181,7 @@ function recordTrade(
     now: number;
     kind: "openShort" | "closeShort";
     postText: string | null;
+    recentPrices: number[];
   },
 ) {
   const tradeRef = db.collection("trades").doc();
@@ -227,5 +224,6 @@ function recordTrade(
     week: a.week,
     createdAt: a.now,
     linkedPostId,
+    recentPrices: a.recentPrices,
   });
 }

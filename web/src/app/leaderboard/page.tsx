@@ -4,7 +4,8 @@ import { Fragment } from "react";
 import { prizeSplitText } from "@fsm/shared";
 import { Avatar } from "@/components/Avatar";
 import { useGame } from "@/components/GameProvider";
-import { changeClass, gbp, pct } from "@/lib/format";
+import Link from "next/link";
+import { changeClass, gbp, pct, profileHref } from "@/lib/format";
 import { liveContenders, liveGrowth } from "@/lib/standings";
 
 export default function LeaderboardPage() {
@@ -59,7 +60,7 @@ export default function LeaderboardPage() {
                     <span className="with-avatar">
                       <Avatar uid={p.uid} name={p.displayName} />
                       <span>
-                        {p.displayName}
+                        <Link href={profileHref(p.uid)}>{p.displayName}</Link>
                         {p.isIdle && <span className="small"> (idle)</span>}
                       </span>
                     </span>

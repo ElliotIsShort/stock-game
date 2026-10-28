@@ -3,6 +3,9 @@ import type { Transaction } from "firebase-admin/firestore";
 import {
   CASH_EPSILON,
   SHARE_EPSILON,
+  holdingAfterBuy,
+  holdingAfterSell,
+  priceTick,
   quoteBuy,
   quoteSell,
   type Holding,
@@ -13,6 +16,7 @@ import {
   type TradeSide,
 } from "@fsm/shared";
 import { asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { announceTrade, withHoldingStats } from "./marketEvents";
 
 export function tradeSummary(t: Pick<Trade, "traderName" | "side" | "shares" | "stockName" | "cashAmount">): string {
   const verb = t.side === "buy" ? "bought" : "sold";
@@ -54,11 +58,14 @@ export const trade = onCall(async (req) => {
     if (!stock.listed) throw new HttpsError("failed-precondition", "That stock is delisted.");
     if (stock.ownerId === uid) throw new HttpsError("permission-denied", "You can't trade your own stock.");
     if (postText && postText.length > cfg.maxPostLength) throw new HttpsError("invalid-argument", `Post must be at most ${cfg.maxPostLength} characters.`);
+    // Holdings from before cost tracking get it rebuilt from their trades (a read, so before any writes).
+    const holding = await withHoldingStats(tx, holdingSnap.exists ? (holdingSnap.data() as Holding) : null);
 
-    const heldShares = holdingSnap.exists ? (holdingSnap.data() as Holding).shares : 0;
+    const heldShares = holding?.shares ?? 0;
     let newCash: number;
-    let newShares: number;
+    let nextHolding: { shares: number; costBasis: number; holdingSince: number };
     let tradeData: Omit<Trade, "id" | "linkedPostId">;
+    let pool: { cash: number; shares: number };
 
     if (side === "buy") {
       if (amount < 0.01) throw new HttpsError("invalid-argument", "Minimum buy is £0.01.");
@@ -66,7 +73,8 @@ export const trade = onCall(async (req) => {
       const spend = Math.min(amount, player.cash);
       const q = quoteBuy(stock, spend, cfg.tradingFeePct);
       newCash = player.cash - spend;
-      newShares = heldShares + q.shares;
+      nextHolding = holdingAfterBuy(holding, q.shares, spend, now);
+      pool = { cash: q.newPoolCash, shares: q.newPoolShares };
       tradeData = {
         traderId: uid,
         traderName: player.displayName,
@@ -82,15 +90,15 @@ export const trade = onCall(async (req) => {
         week: state.currentWeek,
         createdAt: now,
       };
-      applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter);
     } else {
       if (amount > heldShares + SHARE_EPSILON) throw new HttpsError("failed-precondition", "You don't hold that many shares.");
       // Selling "all" may differ from the stored balance by float dust; clamp.
       const sellShares = Math.min(amount, heldShares);
-      if (!(sellShares > 0)) throw new HttpsError("failed-precondition", "You don't hold any shares.");
+      if (!holding || !(sellShares > 0)) throw new HttpsError("failed-precondition", "You don't hold any shares.");
       const q = quoteSell(stock, sellShares, cfg.tradingFeePct);
       newCash = player.cash + q.netCash;
-      newShares = heldShares - sellShares;
+      nextHolding = holdingAfterSell(holding, sellShares, now);
+      pool = { cash: q.newPoolCash, shares: q.newPoolShares };
       tradeData = {
         traderId: uid,
         traderName: player.displayName,
@@ -106,13 +114,15 @@ export const trade = onCall(async (req) => {
         week: state.currentWeek,
         createdAt: now,
       };
-      applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter);
     }
+
+    const tick = priceTick(stock, tradeData.priceAfter, state.currentWeek);
+    applyPool(tx, stock, pool.cash, pool.shares, tradeData.priceAfter, tick.patch);
 
     // Wallet + holding.
     tx.update(refs.player(uid), { cash: newCash, lastActiveAt: now, isIdle: false });
-    if (newShares <= SHARE_EPSILON) tx.delete(refs.holding(uid, stockId));
-    else tx.set(refs.holding(uid, stockId), { uid, stockId, shares: newShares, updatedAt: now });
+    if (nextHolding.shares <= SHARE_EPSILON) tx.delete(refs.holding(uid, stockId));
+    else tx.set(refs.holding(uid, stockId), { uid, stockId, ...nextHolding, updatedAt: now });
 
     // Fee → prize pool.
     const nextState = { ...state, prizePool: state.prizePool + tradeData.fee, weekFees: state.weekFees + tradeData.fee };
@@ -141,14 +151,25 @@ export const trade = onCall(async (req) => {
       };
       tx.set(postRef, post);
     }
-    const tradeDoc: Trade = { id: tradeRef.id, ...tradeData, linkedPostId };
+    const tradeDoc: Trade = { id: tradeRef.id, ...tradeData, linkedPostId, recentPrices: tick.recentPrices };
     tx.set(tradeRef, tradeDoc);
+
+    announceTrade(tx, {
+      kind: side,
+      traderName: player.displayName,
+      stock,
+      cash: tradeData.cashAmount,
+      shares: tradeData.shares,
+      priceBefore: tradeData.priceBefore,
+      priceAfter: tradeData.priceAfter,
+      postText,
+      tick,
+    }, state, cfg, now);
     return tradeDoc;
   });
-
 });
 
-function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number) {
+export function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number, extra: Partial<Stock> = {}) {
   tx.update(refs.stock(stock.id), {
     poolCash,
     poolShares,
@@ -157,5 +178,6 @@ function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: 
     weekHigh: Math.max(stock.weekHigh, price),
     weekLow: Math.min(stock.weekLow, price),
     weekTradeCount: stock.weekTradeCount + 1,
+    ...extra,
   });
 }

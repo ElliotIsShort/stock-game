@@ -57,6 +57,34 @@ describe("positionFromTrades (unrealised P/L)", () => {
     expect(p.unrealised).toBe(0);
   });
 
+  it("tracks realised P/L from sells", () => {
+    // Buy 4 for £400 (avg £100); sell 2 for £260 net → +£60 realised.
+    const b = buy(4, 400);
+    const s = { side: "sell", shares: 2, netCash: 260, createdAt: ++seq, priceAfter: 0 } as Trade;
+    const p = positionFromTrades([b, s], 100);
+    expect(p.realised).toBeCloseTo(60, 9);
+    expect(p.costBasis).toBeCloseTo(200, 9);
+  });
+
+  it("ignores short opens and covers (they don't touch holdings)", () => {
+    const b = buy(2, 100);
+    const short = { side: "sell", kind: "openShort", shares: 5, netCash: 250, createdAt: ++seq } as Trade;
+    const cover = { side: "buy", kind: "closeShort", shares: 5, netCash: -200, createdAt: ++seq } as Trade;
+    const p = positionFromTrades([b, short, cover], 50);
+    expect(p.shares).toBe(2);
+    expect(p.costBasis).toBeCloseTo(100, 9);
+    expect(p.realised).toBe(0);
+  });
+
+  it("restarts the holding run on any sell", () => {
+    const b = buy(4, 400);
+    const s = sell(1);
+    expect(positionFromTrades([b], 100).holdingSince).toBe(b.createdAt);
+    expect(positionFromTrades([b, s], 100).holdingSince).toBe(s.createdAt);
+    const b2 = buy(4, 400);
+    expect(positionFromTrades([b2, sell(4)], 100).holdingSince).toBeNull();
+  });
+
   it("ignores trade order (sorts by time)", () => {
     const b1 = buy(2, 100);
     const b2 = buy(2, 300);

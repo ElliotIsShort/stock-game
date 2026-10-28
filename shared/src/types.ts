@@ -2,6 +2,7 @@
  * Firestore document shapes. Timestamps are stored as epoch milliseconds
  * (numbers) so the same types work on server, client and in reports.
  */
+import type { DiscordMessage } from "./discord";
 
 export interface GameConfig {
   /** Founder starting cash (§4.1). */
@@ -44,6 +45,16 @@ export interface GameConfig {
   prizeSplitPct: number[];
   /** Minimum hours between a player's ticker changes. 0 disables the cooldown. */
   tickerChangeCooldownHours: number;
+  /** 1 = post to the Discord webhook (when its secret is set), 0 = off. */
+  discordEnabled: number;
+  /** Discord: a trade or short at least this fraction of average net worth is "big" and gets posted. */
+  discordBigTradePct: number;
+  /** Discord: max routine posts per hour before the rest roll into an hourly digest. 0 = digest everything routine. */
+  discordMaxPerHour: number;
+  /** Show the "while you were away" recap after this many hours without activity. */
+  recapAfterHours: number;
+  /** Max active price alerts per player. */
+  maxActiveAlerts: number;
 }
 
 export interface GameState {
@@ -55,6 +66,17 @@ export interface GameState {
   weekFees: number;
   weekStartedAt: number;
   lastCloseAt: number | null;
+  /** Average net worth of active players at the last close or listing (Discord "big trade" threshold). */
+  avgNetWorth?: number;
+}
+
+/** What a player looked like the last time they opened the app (drives the recap and moments). */
+export interface SeenSnapshot {
+  at: number;
+  netWorth: number;
+  /** Leaderboard rank, or null when idle/unranked. */
+  rank: number | null;
+  week: number;
 }
 
 export interface Player {
@@ -78,6 +100,10 @@ export interface Player {
   lastPostAt?: number;
   /** Set when the player was deactivated by the bankruptcy rule. Cleared at the next weekly close. */
   bankruptAt?: number;
+  /** Discord user ID (a numeric "snowflake") so Discord posts can @mention them. */
+  discordId?: string;
+  /** Written by `touch` each session. */
+  seenSnapshot?: SeenSnapshot;
 }
 
 export interface Stock {
@@ -106,6 +132,14 @@ export interface Stock {
   ticker?: string;
   /** When the owner last changed their ticker (cooldown). */
   tickerChangedAt?: number;
+  /** The last RECENT_PRICES_MAX prices after each trade, oldest first (feed sparklines). */
+  recentPrices?: number[];
+  /** Highest / lowest price ever traded. Absent until the first trade after this field was added. */
+  allTimeHigh?: number;
+  allTimeLow?: number;
+  /** Week a new all-time high/low was last announced (at most one each per week). */
+  athAnnouncedWeek?: number;
+  atlAnnouncedWeek?: number;
 }
 
 /** Stored at holdings/{uid}_{stockId}. */
@@ -114,6 +148,10 @@ export interface Holding {
   stockId: string;
   shares: number;
   updatedAt: number;
+  /** Average-cost basis of the shares held (cash spent incl. fees). Absent on pre-awards holdings until backfilled. */
+  costBasis?: number;
+  /** When the current unbroken run of holding began: the first buy, reset by any sell (Diamond Hands). */
+  holdingSince?: number;
 }
 
 export type TradeSide = "buy" | "sell";
@@ -171,6 +209,8 @@ export interface Trade {
   linkedPostId?: string | null;
   /** Present when this trade opened or closed a short, so the feed can label it. */
   kind?: "openShort" | "closeShort";
+  /** The stock's recent prices up to and including priceAfter, for the feed card's sparkline. */
+  recentPrices?: number[];
 }
 
 export type ReactionType = "like" | "laugh" | "wow" | "down";
@@ -247,4 +287,49 @@ export interface AuditEntry {
   targetId: string | null;
   details: Record<string, unknown>;
   createdAt: number;
+}
+
+export type AlertDirection = "above" | "below";
+export type AlertStatus = "active" | "triggered" | "cancelled";
+
+/** Stored at alerts/{id}. Readable only by its owner. */
+export interface PriceAlert {
+  id: string;
+  uid: string;
+  stockId: string;
+  stockName: string;
+  direction: AlertDirection;
+  /** Target price in £. */
+  price: number;
+  /** Also @mention the owner on Discord when it fires (needs a linked Discord ID). */
+  discord: boolean;
+  status: AlertStatus;
+  createdAt: number;
+  triggeredAt?: number;
+  triggeredPrice?: number;
+}
+
+/** Stored at notifications/{id}. In-app messages for one player; readable only by them. */
+export interface AppNotification {
+  id: string;
+  uid: string;
+  kind: "alert";
+  title: string;
+  body: string;
+  stockId: string | null;
+  createdAt: number;
+  read: boolean;
+}
+
+/** Stored at discordOutbox/{id}. Server-only (no client access). */
+export interface DiscordOutboxItem {
+  id: string;
+  /** "high" posts immediately; "normal" is rate-limited and may be rolled into a digest. */
+  priority: "high" | "normal";
+  kind: string;
+  message: DiscordMessage;
+  status: "pending" | "sent" | "queued" | "digested" | "failed" | "skipped";
+  createdAt: number;
+  sentAt?: number;
+  error?: string;
 }

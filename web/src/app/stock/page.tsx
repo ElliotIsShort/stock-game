@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import type { Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
@@ -13,11 +13,13 @@ import { ShortPanel } from "@/components/ShortPanel";
 import { Avatar } from "@/components/Avatar";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { TickerEditor } from "@/components/TickerEditor";
+import { AlertPanel } from "@/components/AlertPanel";
+import { PlayerProfile } from "@/components/PlayerProfile";
 import { DonutChart } from "@/components/DonutChart";
 import { api, errorMessage } from "@/lib/api";
 import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
-import { changeClass, gbp, pct, shares } from "@/lib/format";
+import { changeClass, gbp, pct, profileHref, shares, stockHref } from "@/lib/format";
 
 export default function StockPage() {
   return (
@@ -27,9 +29,25 @@ export default function StockPage() {
   );
 }
 
+type Tab = "stock" | "player";
+
 function StockView() {
-  const id = useSearchParams().get("id") ?? "";
+  const params = useSearchParams();
+  const router = useRouter();
+  const id = params.get("id") ?? "";
+  const tab: Tab = params.get("tab") === "player" ? "player" : "stock";
   const { stockById, holdings, playerById, me, isAdmin, photoOf, tickerOf } = useGame();
+  const tabsRef = useRef<HTMLDivElement>(null);
+  function selectTab(next: Tab, focus = false) {
+    router.replace(next === "player" ? profileHref(id) : stockHref(id), { scroll: false });
+    if (focus) requestAnimationFrame(() => tabsRef.current?.querySelector<HTMLElement>(`#tab-${next}`)?.focus());
+  }
+  function onTabKey(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      selectTab(e.key === "Home" ? "stock" : e.key === "End" ? "player" : tab === "stock" ? "player" : "stock", true);
+    }
+  }
   const stock = stockById.get(id);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
@@ -94,9 +112,38 @@ function StockView() {
           <dd>{gbp(stock.listPrice)} (week {stock.listedWeek})</dd>
           <dt>Pool depth</dt>
           <dd>{gbp(stock.poolCash)} · {shares(stock.poolShares)} shares</dd>
+          {stock.allTimeHigh !== undefined && stock.allTimeLow !== undefined && (
+            <>
+              <dt>All-time high / low</dt>
+              <dd>{gbp(stock.allTimeHigh)} / {gbp(stock.allTimeLow)}</dd>
+            </>
+          )}
         </dl>
       </div>
 
+      <div className="tabs" role="tablist" aria-label={`${stock.displayName}`} ref={tabsRef} onKeyDown={onTabKey}>
+        {(["stock", "player"] as const).map((t) => (
+          <button
+            key={t}
+            id={`tab-${t}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={`panel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
+            onClick={() => selectTab(t)}
+          >
+            {t === "stock" ? "Stock" : stock.id === me?.uid ? "You" : "Player"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "player" ? (
+        <div id="panel-player" role="tabpanel" aria-labelledby="tab-player">
+          <PlayerProfile uid={stock.id} />
+        </div>
+      ) : (
+      <div id="panel-stock" role="tabpanel" aria-labelledby="tab-stock" className="stack">
       <div className="grid-2">
         <div className="card">
           <PriceChart points={points} label={`${stock.displayName} price history`} />
@@ -105,6 +152,8 @@ function StockView() {
       </div>
 
       {stock.listed && stock.ownerId !== me?.uid && <ShortPanel stock={stock} />}
+
+      <AlertPanel stock={stock} />
 
       {stock.id === me?.uid && stock.listed && (
         <section className="card stack">
@@ -151,6 +200,8 @@ function StockView() {
         <PostComposer defaultTag={stock.id} />
         <Feed stockId={stock.id} pageSize={10} />
       </section>
+      </div>
+      )}
     </div>
   );
 }

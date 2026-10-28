@@ -2,6 +2,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import {
   assignTickers,
   defaultTicker,
+  listingMessage,
   listingPool,
   listingPrice,
   mean,
@@ -26,6 +27,7 @@ import {
   requireAdmin,
 } from "./common";
 import { backfillTickers } from "./ticker";
+import { enqueueDiscord } from "./discord";
 
 /** §4.3 step 1: a signed-in user asks to join. No funds until an admin approves. */
 export const register = onCall(async (req) => {
@@ -139,7 +141,10 @@ export const approvePlayer = onCall(async (req) => {
     tx.set(refs.stock(uid), stock);
     backfillTickers(tx, world.stocks, tickers);
     tx.update(refs.registration(uid), { status: "approved", decidedAt: now, decidedBy: adminId });
-    if (!stateExists) tx.set(refs.state(), state);
+    // Average net worth also sets Discord's "big trade" threshold until the next close refreshes it.
+    if (!stateExists) tx.set(refs.state(), { ...state, avgNetWorth });
+    else tx.update(refs.state(), { avgNetWorth });
+    enqueueDiscord(tx, "high", "listing", listingMessage(uid, reg.displayName, ticker, price), now);
 
     const postRef = db.collection("posts").doc();
     const post: Post = {

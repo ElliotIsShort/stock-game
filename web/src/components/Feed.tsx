@@ -7,7 +7,8 @@ import { REACTION_EMOJI, REACTION_TYPES, type Post, type ReactionType, type Trad
 import { fb } from "@/lib/firebase";
 import { prefersReducedMotion, useMediaQuery, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
-import { ago, changeClass, gbp, pct, shares, signedGbp, stockHref } from "@/lib/format";
+import { ago, changeClass, gbp, pct, profileHref, shares, signedGbp, stockHref } from "@/lib/format";
+import { Sparkline } from "./StatCard";
 import { playSound } from "@/lib/sound";
 import { feedCutoff } from "@/lib/pagination";
 import { Avatar } from "./Avatar";
@@ -156,7 +157,7 @@ function TradeItem({ trade }: { trade: Trade }) {
       <div className="item-head">
         <span className={`badge ${isShort ? "short" : trade.side}`}>{badge}</span>
         <span>
-          <strong>{trade.traderName}</strong> {verb} {shares(trade.shares)} shares of{" "}
+          <Link href={profileHref(trade.traderId)} className="strong-link">{trade.traderName}</Link> {verb} {shares(trade.shares)} shares of{" "}
           <Link href={stockHref(trade.stockId)}>{trade.stockName}</Link>{trade.kind === "openShort" ? "" : ` for ${gbp(trade.cashAmount)}`}
         </span>
         <time className="muted small" dateTime={new Date(trade.createdAt).toISOString()}>{ago(trade.createdAt)}</time>
@@ -167,6 +168,8 @@ function TradeItem({ trade }: { trade: Trade }) {
         <span className={`delta ${changeClass(move)}`}>
           <span aria-hidden="true">{move > 0.00005 ? "▲" : move < -0.00005 ? "▼" : "■"}</span> {signedGbp(trade.priceAfter - trade.priceBefore)} ({pct(move)})
         </span>
+        {/* Recent prices up to this trade (stored on the trade). Older trades don't have them. */}
+        {trade.recentPrices && trade.recentPrices.length >= 3 && <Sparkline values={trade.recentPrices} className="trade-spark" />}
       </div>
       {mine && !trade.linkedPostId && (
         annotating ? (
@@ -251,7 +254,7 @@ function PostItem({ post }: { post: Post }) {
     <article className={`item post${post.system ? " system" : ""}`}>
       <div className="item-head">
         {!post.system && <Avatar uid={post.authorId} name={post.authorName} size={24} />}
-        <strong>{post.authorName}</strong>
+        {post.system ? <strong>{post.authorName}</strong> : <Link href={profileHref(post.authorId)} className="strong-link">{post.authorName}</Link>}
         {post.taggedStockId && post.taggedName && !post.system && (
           <span className="muted">
             {" "}on <Link href={stockHref(post.taggedStockId)}>{post.taggedName}</Link>

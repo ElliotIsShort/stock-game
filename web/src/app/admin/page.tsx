@@ -6,10 +6,14 @@ import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { doc } from "firebase/firestore";
 import {
   CONFIG_BOUNDS,
-  DEFAULT_CHANGELOG,
   DEFAULT_RULES,
+  MAX_DEVLOG_TITLE,
+  devlogDateFromIso,
+  devlogDateToIso,
   prizeSplitText,
+  validateDevlogEntry,
   type AuditEntry,
+  type DevlogEntry,
   type Bound,
   type GameConfig,
   type Registration,
@@ -20,6 +24,8 @@ import { fb } from "@/lib/firebase";
 import { useDoc, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
 import { ago, gbp } from "@/lib/format";
+import { formatDevlogDate, useDevlog } from "@/lib/devlog";
+import { SimpleMarkdown } from "@/components/SimpleMarkdown";
 
 export default function AdminPage() {
   const { isAdmin, setPreviewAsPlayer } = useGame();
@@ -43,12 +49,68 @@ export default function AdminPage() {
       <Approvals />
       <Players />
       <WeeklyClose />
+      <DiscordAdmin />
       <ConfigEditor />
+      <DevlogEditor />
       <ContentEditor />
       <Delist />
       <AuditLog />
       <ResetGame />
     </div>
+  );
+}
+
+/** Discord webhook: check the connection and flush the digest. The URL itself lives in a Functions secret. */
+function DiscordAdmin() {
+  const { config, players } = useGame();
+  const { busy, run, view } = useAction();
+  const linked = players.filter((p) => p.discordId).length;
+  return (
+    <section className="card stack">
+      <h2>Discord</h2>
+      <p className="small muted">
+        Posts big trades and shorts (at least {Math.round(config.discordBigTradePct * 100)}% of average net worth), listings, bankruptcies,
+        all-time highs and lows, price alerts and the weekly close. Routine posts beyond {config.discordMaxPerHour} an hour roll into an hourly digest.
+        {config.discordEnabled !== 1 && <strong> Currently switched off in Config.</strong>} {linked} of {players.length} players have linked Discord.
+      </p>
+      <div className="row wrap">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              const res = await api.testDiscord();
+              if (!res.ok) throw new Error(res.error ?? "Discord didn't accept the message.");
+              return "Sent. Check your Discord channel.";
+            })
+          }
+        >
+          Send test message
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              const res = await api.sendDiscordDigest();
+              return res.skipped ?? (res.sent ? `Posted a digest of ${res.sent} update(s).` : "Nothing waiting for the digest.");
+            })
+          }
+        >
+          Send digest now
+        </button>
+      </div>
+      <details className="small muted">
+        <summary>Setting up the webhook</summary>
+        <ol>
+          <li>In Discord: channel settings (⚙️) → <strong>Integrations</strong> → <strong>Webhooks</strong> → <strong>New Webhook</strong>. Name it Stonker, then <strong>Copy Webhook URL</strong>.</li>
+          <li>In a terminal in the project: <code>npx firebase functions:secrets:set DISCORD_WEBHOOK_URL</code> and paste the URL.</li>
+          <li>Redeploy the functions (<code>npm run deploy:backend</code>), then press <strong>Send test message</strong>.</li>
+        </ol>
+        <p>Treat the URL like a password: anyone with it can post to the channel. It&apos;s never stored in Firestore.</p>
+      </details>
+      {view}
+    </section>
   );
 }
 
@@ -117,33 +179,27 @@ function Players() {
   );
 }
 
-/** Edit the Rules and Change log pages shown to players. */
+/** Edit the Rules page shown to players. */
 function ContentEditor() {
   const content = useDoc<SiteContent>(doc(fb().db, "content", "global"), []);
   const [rules, setRules] = useState<string | null>(null);
-  const [changelog, setChangelog] = useState<string | null>(null);
   const { busy, run, view } = useAction();
 
-  // Seed the editors once content loads (or fall back to the defaults).
+  // Seed the editor once content loads (or fall back to the default).
   useEffect(() => {
     if (content.loading) return;
     setRules((r) => (r === null ? content.data?.rules ?? DEFAULT_RULES : r));
-    setChangelog((c) => (c === null ? content.data?.changelog ?? DEFAULT_CHANGELOG : c));
   }, [content.loading, content.data]);
 
   return (
     <section className="card">
-      <h2>Rules &amp; change log</h2>
+      <h2>Rules</h2>
       <p className="muted small">
-        Shown on the Rules and Change log pages. Use <code># Heading</code>, <code>## Subheading</code> and <code>- bullet</code> lines.
+        Shown on the Rules page. Use <code># Heading</code>, <code>## Subheading</code> and <code>- bullet</code> lines.
       </p>
       <label>
         Rules
         <textarea rows={10} value={rules ?? ""} onChange={(e) => setRules(e.target.value)} />
-      </label>
-      <label>
-        Change log
-        <textarea rows={10} value={changelog ?? ""} onChange={(e) => setChangelog(e.target.value)} />
       </label>
       <button
         type="button"
@@ -151,17 +207,134 @@ function ContentEditor() {
         disabled={busy}
         onClick={() =>
           run(async () => {
-            const patch: { rules?: string; changelog?: string } = {};
-            if (rules !== null && rules !== (content.data?.rules ?? DEFAULT_RULES)) patch.rules = rules;
-            if (changelog !== null && changelog !== (content.data?.changelog ?? DEFAULT_CHANGELOG)) patch.changelog = changelog;
-            if (!patch.rules && !patch.changelog) return "No changes to save.";
-            await api.updateContent(patch);
-            return `Saved ${Object.keys(patch).join(" & ")}.`;
+            if (rules === null || rules === (content.data?.rules ?? DEFAULT_RULES)) return "No changes to save.";
+            await api.updateContent({ rules });
+            return "Saved the rules.";
           })
         }
       >
-        Save content
+        Save rules
       </button>
+      {view}
+    </section>
+  );
+}
+
+const todayIso = () => devlogDateToIso(Date.now());
+
+/** Write, edit and delete dev diary entries (the Dev diary page). */
+function DevlogEditor() {
+  const { entries, loading, legacy } = useDevlog();
+  const real = legacy ? [] : entries;
+  const [editing, setEditing] = useState<DevlogEntry | null>(null);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [date, setDate] = useState(todayIso);
+  const { busy, run, view } = useAction();
+
+  function startEdit(e: DevlogEntry | null) {
+    setEditing(e);
+    setTitle(e?.title ?? "");
+    setBody(e?.body ?? "");
+    setDate(e ? devlogDateToIso(e.date) : todayIso());
+  }
+
+  function submit(ev: FormEvent) {
+    ev.preventDefault();
+    const when = devlogDateFromIso(date);
+    run(async () => {
+      if (when === null) throw new Error("Pick a valid date.");
+      const check = validateDevlogEntry(title, body, when);
+      if (!check.ok) throw new Error(check.error);
+      const saved = await api.saveDevlogEntry({ ...(editing ? { id: editing.id } : {}), title, body, date: when });
+      startEdit(null);
+      return editing ? `Updated "${saved.title}".` : `Published "${saved.title}".`;
+    });
+  }
+
+  function remove(e: DevlogEntry) {
+    if (!window.confirm(`Delete "${e.title}"? Its text is kept in the audit log.`)) return;
+    run(async () => {
+      await api.deleteDevlogEntry(e.id);
+      if (editing?.id === e.id) startEdit(null);
+      return `Deleted "${e.title}".`;
+    });
+  }
+
+  return (
+    <section className="card stack">
+      <h2>Dev diary</h2>
+      <p className="muted small">
+        Each entry is its own update on the Dev diary page, newest first. Players see a dot on their account menu until they&apos;ve read
+        the latest one. Use <code>## Subheading</code> and <code>- bullet</code> lines in the body.
+      </p>
+
+      {!loading && real.length === 0 && (
+        <div className="row wrap">
+          <span className="small muted">The page is showing the old one-page change log.</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                const res = await api.importDevlog();
+                return res.added.length ? `Imported ${res.added.length} entries: ${res.added.join(", ")}.` : "Already imported.";
+              })
+            }
+          >
+            Import the change log so far
+          </button>
+        </div>
+      )}
+
+      {real.length > 0 && (
+        <ul className="plain">
+          {real.map((e) => (
+            <li key={e.id} className="row between wrap">
+              <span>
+                <strong>{e.title}</strong> <span className="muted small">{formatDevlogDate(e.date)}</span>
+              </span>
+              <span className="row">
+                <button type="button" className="link small" disabled={busy} onClick={() => startEdit(e)}>Edit</button>
+                <button type="button" className="link small danger" disabled={busy} onClick={() => remove(e)}>Delete</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form className="stack devlog-form" onSubmit={submit}>
+        <h3 className="small muted">{editing ? `Editing "${editing.title}"` : "New entry"}</h3>
+        <div className="row wrap">
+          <label style={{ flex: "1 1 16rem" }}>
+            Title
+            <input value={title} maxLength={MAX_DEVLOG_TITLE} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Price alerts are here" />
+          </label>
+          <label>
+            Date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+        </div>
+        <label>
+          Body
+          <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} placeholder={"## What's new\nA sentence or two.\n\n- Or a list\n- Of changes"} />
+        </label>
+        {body.trim() && (
+          <details>
+            <summary className="small muted">Preview</summary>
+            <div className="devlog-preview">
+              <h1>{title || "Untitled"}</h1>
+              <SimpleMarkdown text={body} />
+            </div>
+          </details>
+        )}
+        <div className="row">
+          <button type="submit" className="primary" disabled={busy || !title.trim() || !body.trim()}>
+            {editing ? "Save changes" : "Publish entry"}
+          </button>
+          {editing && <button type="button" disabled={busy} onClick={() => startEdit(null)}>Cancel</button>}
+        </div>
+      </form>
       {view}
     </section>
   );

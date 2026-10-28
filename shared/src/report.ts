@@ -1,3 +1,4 @@
+import type { Award } from "./awards";
 import { prizeSplit, type PrizeWinner } from "./economy";
 import type { GameConfig } from "./types";
 
@@ -109,6 +110,8 @@ export interface WeeklyReport {
     biggestGainers: { name: string; pctChange: number }[];
     biggestLosers: { name: string; pctChange: number }[];
     topPosts: { postId: string; authorName: string; text: string; reactionCount: number }[];
+    /** Weekly awards. Absent on reports from before awards existed. */
+    awards?: Award[];
   };
   flags: ReportFlag[];
   /** Balances snapshotted before any weekly payouts. */
@@ -241,6 +244,10 @@ export function reportToMarkdown(r: Omit<WeeklyReport, "markdown">): string {
     hl.winners.forEach((w, i) => {
       lines.push(`  ${i + 1}. **${w.name}** with ${pct(w.growth)} growth, won ${gbp(w.prizeAmount)}`);
     });
+  }
+  if (hl.awards?.length) {
+    lines.push("- Awards:");
+    for (const a of hl.awards) lines.push(`  - ${a.emoji} ${a.title}: **${a.name}** (${a.detail})`);
   }
   lines.push("- Leaderboard:");
   hl.leaderboard.forEach((row, i) => {

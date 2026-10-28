@@ -24,28 +24,42 @@ export interface Position {
   unrealised: number;
   /** unrealised / costBasis, or 0 when there's no cost basis. */
   unrealisedPct: number;
+  /** Profit/loss locked in by sells (net sale cash − average cost of the shares sold). */
+  realised: number;
+  /** When the current unbroken run of holding began (first buy, restarted by any sell), or null when flat. */
+  holdingSince: number | null;
 }
 
-export function positionFromTrades(trades: Trade[], currentPrice: number): Position {
-  const ordered = [...trades].sort((a, b) => a.createdAt - b.createdAt);
+/**
+ * Short opens/closes are recorded as trades too (`kind`), but they don't
+ * touch your holdings, so they're ignored here.
+ */
+export function positionFromTrades(trades: Pick<Trade, "side" | "shares" | "netCash" | "createdAt" | "kind">[], currentPrice: number): Position {
+  const ordered = trades.filter((t) => !t.kind).sort((a, b) => a.createdAt - b.createdAt);
   let shares = 0;
   let cost = 0;
+  let realised = 0;
+  let since: number | null = null;
   for (const t of ordered) {
     if (t.side === "buy") {
       // netCash is negative for buys: the cash that left the wallet.
       cost += Math.abs(t.netCash);
+      if (shares <= 1e-9) since = t.createdAt;
       shares += t.shares;
     } else {
       const avg = shares > 0 ? cost / shares : 0;
       const sold = Math.min(t.shares, shares);
       cost -= avg * sold;
+      realised += t.netCash * (t.shares > 0 ? sold / t.shares : 0) - avg * sold;
       shares -= sold;
+      since = t.createdAt;
     }
   }
   // Clean up float dust around zero.
   if (shares < 1e-9) {
     shares = 0;
     cost = 0;
+    since = null;
   }
   const marketValue = shares * currentPrice;
   const unrealised = marketValue - cost;
@@ -56,5 +70,7 @@ export function positionFromTrades(trades: Trade[], currentPrice: number): Posit
     marketValue,
     unrealised,
     unrealisedPct: cost > 0 ? unrealised / cost : 0,
+    realised,
+    holdingSince: since,
   };
 }

@@ -20,6 +20,11 @@ export const DEFAULT_CONFIG: GameConfig = {
   shortBorrowFeePct: 0.02,
   prizeSplitPct: [0.6, 0.25, 0.15],
   tickerChangeCooldownHours: 24,
+  discordEnabled: 1,
+  discordBigTradePct: 0.4,
+  discordMaxPerHour: 6,
+  recapAfterHours: 48,
+  maxActiveAlerts: 10,
 };
 
 export interface NumberBound {
@@ -70,6 +75,11 @@ export const CONFIG_BOUNDS: ConfigBounds = {
     help: "Comma-separated, e.g. 0.6, 0.25, 0.15. Rescaled to 100% across however many players qualify.",
   },
   tickerChangeCooldownHours: { min: 0, max: 8760, label: "Ticker change cooldown (hours)", help: "Minimum hours between a player's ticker changes; 0 disables it" },
+  discordEnabled: { min: 0, max: 1, integer: true, label: "Discord posts (1 = on, 0 = off)", help: "Only posts if the DISCORD_WEBHOOK_URL secret is set" },
+  discordBigTradePct: { min: 0, max: 10, label: "Discord: big trade (fraction of avg net worth)", help: "0.4 = trades and shorts worth 40% of average net worth get posted" },
+  discordMaxPerHour: { min: 0, max: 100, integer: true, label: "Discord: max posts per hour", help: "Routine posts beyond this roll into an hourly digest. Closes, listings, bankruptcies and alerts always post" },
+  recapAfterHours: { min: 1, max: 8760, label: "Recap after (hours away)", help: "Show the \"while you were away\" recap after this long without activity" },
+  maxActiveAlerts: { min: 0, max: 100, integer: true, label: "Max price alerts per player", help: "How many active price alerts one player can have at once" },
 };
 
 function listErrors(key: string, value: unknown, bound: ListBound): string[] {

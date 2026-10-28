@@ -6,6 +6,7 @@ import { collection, doc, limit, orderBy, query, where } from "firebase/firestor
 import { positionFromTrades, quoteCloseShort, shortUnrealised, type NetWorthHistory, type Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
+import { AlertList } from "@/components/AlertPanel";
 import { LineChart } from "@/components/LineChart";
 import { DonutChart } from "@/components/DonutChart";
 import { StatCard } from "@/components/StatCard";
@@ -14,7 +15,7 @@ import { useDoc, useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
 
 export default function PortfolioPage() {
-  const { me, playerById, myHoldings, myShorts, stockById, holdings, config } = useGame();
+  const { me, playerById, myHoldings, myShorts, myAlerts, stockById, holdings, config } = useGame();
   const uid = me?.uid ?? null;
   // All of my trades, oldest-first cost basis needs the full history (not just recent).
   const myTrades = useQuery<Trade>(
@@ -27,6 +28,8 @@ export default function PortfolioPage() {
   const tradesByStock = useMemo(() => {
     const map = new Map<string, Trade[]>();
     for (const t of myTrades.data) {
+      // Short opens/covers are trades too, but they don't change what you hold.
+      if (t.kind) continue;
       const list = map.get(t.stockId) ?? [];
       list.push(t);
       map.set(t.stockId, list);
@@ -168,6 +171,15 @@ export default function PortfolioPage() {
           </div>
         </section>
       )}
+
+      <section className="card">
+        <h2>Price alerts</h2>
+        {myAlerts.length === 0 ? (
+          <p className="muted small">No alerts. Set one from any stock page, e.g. &ldquo;tell me when James drops below £50&rdquo;.</p>
+        ) : (
+          <AlertList alerts={myAlerts} withStock />
+        )}
+      </section>
 
       {myStock && (
         <section className="card">

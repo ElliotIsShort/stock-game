@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { gbp, stockHref } from "@/lib/format";
+import { gbp, profileHref, stockHref } from "@/lib/format";
 import { setPrefs, usePrefs, type ThemePref } from "@/lib/prefs";
+import { devlogSeenAt, isNewSince, useDevlog } from "@/lib/devlog";
 import { playSound } from "@/lib/sound";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
@@ -35,6 +36,9 @@ export function AccountMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const prefs = usePrefs();
+  const diary = useDevlog();
+  // Re-read on each render (opening/closing the menu, navigating) so a visit to the diary clears it.
+  const hasNewUpdate = Boolean(diary.entries[0] && isNewSince(diary.entries[0], devlogSeenAt()));
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
   const name = me?.displayName ?? g.user?.displayName ?? g.user?.email ?? "Account";
   const uid = me?.uid ?? g.user?.uid ?? "";
@@ -119,12 +123,15 @@ export function AccountMenu() {
         }}
         onKeyDown={onTriggerKey}
       >
-        <Avatar uid={uid} name={name} size={28} />
+        <span className="account-avatar">
+          <Avatar uid={uid} name={name} size={28} />
+          {hasNewUpdate && <span className="diary-dot on-avatar" aria-hidden="true" />}
+        </span>
         <span className="account-name">{name}</span>
         <svg className="account-chevron" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
           <path d="M6 9l6 6 6-6" />
         </svg>
-        <span className="sr-only">Account menu</span>
+        <span className="sr-only">Account menu{hasNewUpdate ? " (new dev diary update)" : ""}</span>
       </button>
 
       <div id={menuId} ref={menuRef} className="account-menu" role="menu" aria-label="Account" data-open={open || undefined} onKeyDown={onMenuKey}>
@@ -156,9 +163,14 @@ export function AccountMenu() {
 
         <div className="account-sep" role="separator" />
         {me && (
-          <MenuLink href={stockHref(me.uid)} onSelect={() => setOpen(false)} hint="Price, holders and your photo">
-            My stock
-          </MenuLink>
+          <>
+            <MenuLink href={profileHref(me.uid)} onSelect={() => setOpen(false)} hint="Badges, history and Discord">
+              My profile
+            </MenuLink>
+            <MenuLink href={stockHref(me.uid)} onSelect={() => setOpen(false)} hint="Price, holders, ticker and photo">
+              My stock
+            </MenuLink>
+          </>
         )}
         {g.isRealAdmin && (
           <button type="button" role="menuitem" className="account-item" onClick={togglePreview}>
@@ -167,7 +179,9 @@ export function AccountMenu() {
           </button>
         )}
         <MenuLink href="/rules/" onSelect={() => setOpen(false)}>Rules</MenuLink>
-        <MenuLink href="/changelog/" onSelect={() => setOpen(false)}>Change log</MenuLink>
+        <MenuLink href="/changelog/" onSelect={() => setOpen(false)} hint={hasNewUpdate ? `New: ${diary.entries[0].title}` : undefined}>
+          Dev diary{hasNewUpdate && <span className="diary-dot" aria-label="(new update)" />}
+        </MenuLink>
 
         <div className="account-sep" role="separator" />
         <div className="account-label muted small" role="presentation">Preferences</div>

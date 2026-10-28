@@ -1,6 +1,11 @@
 import { HttpsError } from "firebase-functions/v2/https";
 import { FieldValue } from "firebase-admin/firestore";
 import {
+  assignTickers,
+  computeAwards,
+  positionFromTrades,
+  weeklyCloseMessage,
+  type Holding,
   ceoBonus,
   isIdleSince,
   leaderboardScore,
@@ -32,6 +37,7 @@ import {
   type WeeklyReport,
 } from "@fsm/shared";
 import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWorld, refs } from "./common";
+import { enqueueDiscord } from "./discord";
 
 export interface CloseOptions {
   trigger: "admin" | "cron";
@@ -82,6 +88,20 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     const activePlayerIds = world.players.filter((p) => p.isActive).map((p) => p.uid);
     const historySnaps = await Promise.all(activePlayerIds.map((uid) => tx.get(refs.netWorthHistory(uid))));
     const historyOf = new Map(activePlayerIds.map((uid, i) => [uid, historySnaps[i].data()?.points ?? []]));
+    // Holdings from before cost tracking: rebuild cost basis / holding run from each owner's trades (once).
+    const needsStats = (h: Holding) => h.costBasis == null || h.holdingSince == null;
+    const legacyUids = [...new Set(world.holdings.filter(needsStats).map((h) => h.uid))];
+    const legacyTradeSnaps = await Promise.all(legacyUids.map((uid) => tx.get(db.collection("trades").where("traderId", "==", uid))));
+    const backfill = new Map<string, { costBasis: number; holdingSince: number }>();
+    legacyUids.forEach((uid, i) => {
+      const mine = legacyTradeSnaps[i].docs.map((d) => d.data() as Trade);
+      for (const h of world.holdings) {
+        if (h.uid !== uid || !needsStats(h)) continue;
+        const pos = positionFromTrades(mine.filter((t) => t.stockId === h.stockId), 0);
+        backfill.set(`${h.uid}_${h.stockId}`, { costBasis: pos.costBasis, holdingSince: pos.holdingSince ?? 0 });
+      }
+    });
+    const holdingStats = (h: Holding) => backfill.get(`${h.uid}_${h.stockId}`) ?? { costBasis: h.costBasis ?? 0, holdingSince: h.holdingSince ?? 0 };
     const trades = tradesSnap.docs.map((d) => d.data() as Trade);
     const posts = postsSnap.docs.map((d) => d.data() as Post).filter((p) => !p.system);
     const prevReport = prevSnap.exists ? (prevSnap.data() as WeeklyReport) : null;
@@ -279,6 +299,20 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
 
     const flags = computeFlags(cfg, stockStats, [...stocks.values()], world.holdings, trades, allPlayers);
 
+    // Weekly awards (also profile badges).
+    const tickers = assignTickers(world.stocks);
+    const awards = computeAwards({
+      weekStartedAt: state.weekStartedAt,
+      now,
+      nameOf: (uid) => players.get(uid)?.displayName,
+      tickerOf: (id) => tickers.get(id) ?? "",
+      stocks: [...stocks.values()].map((s) => ({ id: s.id, name: s.displayName, weekOpenPrice: s.weekOpenPrice, price: s.price })),
+      holdings: world.holdings
+        .filter((h) => h.shares > 0 && stocks.has(h.stockId))
+        .map((h) => ({ uid: h.uid, stockId: h.stockId, shares: h.shares, price: stocks.get(h.stockId)!.price, ...holdingStats(h) })),
+      posts: posts.map((p) => ({ id: p.id, authorId: p.authorId, text: p.text, reactionCount: p.reactionCount, down: p.reactions?.down?.length ?? 0, createdAt: p.createdAt })),
+    });
+
     const summary: Record<string, number> = {
       totalCash,
       totalStockValue,
@@ -355,6 +389,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
           .sort((a, b) => b.reactionCount - a.reactionCount)
           .slice(0, 3)
           .map((p) => ({ postId: p.id, authorName: p.authorName, text: p.text, reactionCount: p.reactionCount })),
+        awards,
       },
       flags,
       snapshot,
@@ -397,6 +432,10 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
         weekTradeCount: 0,
       });
     }
+    for (const [key, stats] of backfill) {
+      const h = world.holdings.find((x) => `${x.uid}_${x.stockId}` === key)!;
+      tx.update(refs.holding(h.uid, h.stockId), stats);
+    }
     // Borrow fees collected this close seed next week's prize pool.
     tx.set(refs.state(), {
       currentWeek: week + 1,
@@ -404,6 +443,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       weekFees: 0,
       weekStartedAt: now,
       lastCloseAt: now,
+      avgNetWorth,
     });
     for (const w of borrowFeeWrites) tx.update(refs.short(w.shortId), { borrowFeesPaid: w.total });
     tx.set(reportRef, report);
@@ -434,6 +474,14 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       createdAt: now,
     };
     tx.set(postRef, sysPost);
+    enqueueDiscord(tx, "high", "weeklyClose", weeklyCloseMessage({
+      week,
+      prizePaid,
+      winners,
+      index,
+      indexChange: changes.index ?? null,
+      awards,
+    }), now);
     tx.set(
       auditRef(),
       auditEntry(opts.actorId ?? "cron", "weeklyClose", reportRef.id, {

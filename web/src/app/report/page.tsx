@@ -6,7 +6,9 @@ import { doc } from "firebase/firestore";
 import { reportWinners, type WeeklyReport } from "@fsm/shared";
 import { fb } from "@/lib/firebase";
 import { useDoc } from "@/lib/hooks";
-import { changeClass, gbp, pct } from "@/lib/format";
+import Link from "next/link";
+import { ResultsModal } from "@/components/ResultsModal";
+import { changeClass, gbp, pct, profileHref } from "@/lib/format";
 
 export default function ReportPage() {
   return (
@@ -20,6 +22,7 @@ function ReportView() {
   const id = useSearchParams().get("id") ?? "";
   const report = useDoc<WeeklyReport>(id ? doc(fb().db, "weeklyReports", id) : null, [id]);
   const [copied, setCopied] = useState<string | null>(null);
+  const [showResults, setShowResults] = useState(false);
 
   if (report.loading) return <p className="muted">Loading…</p>;
   const r = report.data;
@@ -74,7 +77,26 @@ function ReportView() {
             {r.flags.map((f, i) => <li key={i} className="flag">⚠️ {f.message}</li>)}
           </ul>
         )}
+        <button type="button" onClick={() => setShowResults(true)}>Show results screen</button>
       </section>
+
+      {(r.highlights.awards?.length ?? 0) > 0 && (
+        <section className="card">
+          <h2>Awards</h2>
+          <ul className="awards">
+            {r.highlights.awards!.map((a) => (
+              <li key={a.key}>
+                <span className="award-emoji" aria-hidden="true">{a.emoji}</span>
+                <span>
+                  <strong>{a.title}</strong>: <Link href={profileHref(a.playerId)}>{a.name}</Link>
+                  <span className="muted small"> · {a.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {showResults && <ResultsModal week={r.week} onClose={() => setShowResults(false)} />}
 
       <div className="stats">
         <div className="stat"><div className="muted small">Total net worth</div><div className="big">{gbp(r.money.totalNetWorth)}</div>{delta("totalNetWorth", gbp)}</div>

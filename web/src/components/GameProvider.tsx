@@ -2,15 +2,16 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { collection, doc, query, where } from "firebase/firestore";
+import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
 import {
   assignTickers,
+  computeStandings,
   DEFAULT_CONFIG,
-  leaderboardScore,
   mergeConfig,
-  netWorth,
-  quoteCloseShort,
-  shortsLiability,
+  type AppNotification,
+  type PriceAlert,
+  type Recap,
+  type SeenSnapshot,
   type GameConfig,
   type GameState,
   type Holding,
@@ -28,6 +29,8 @@ export interface PlayerView extends Player {
   netWorth: number;
   score: number;
   holdingsValue: number;
+  /** Leaderboard rank among active, non-idle players; null otherwise. */
+  rank: number | null;
 }
 
 interface GameContextValue {
@@ -61,6 +64,19 @@ interface GameContextValue {
   photoOf: (uid: string) => string | undefined;
   /** A stock's ticker (stored, or the legacy default the server would assign). */
   tickerOf: (stockId: string) => string;
+  /** Stocks, players, holdings and shorts have all loaded, so net worths and ranks are real. */
+  marketReady: boolean;
+  /** "While you were away", until dismissed (kept for the browser tab). */
+  recap: Recap | null;
+  dismissRecap: () => void;
+  /** Your snapshot from the session before this tab opened (moments compare against it). */
+  previousSession: SeenSnapshot | null;
+  /** True once this tab's touch has answered (previousSession is settled). */
+  sessionKnown: boolean;
+  /** Your 20 most recent in-app notifications, newest first. */
+  notifications: AppNotification[];
+  /** Your active price alerts. */
+  myAlerts: PriceAlert[];
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -125,14 +141,55 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, "meta", "state") : null, [on]);
   const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, "config", "global") : null, [on]);
 
-  // Record activity once per session; silently reactivates idle players.
+  const notificationsQ = useQuery<AppNotification>(
+    liveDb && uid ? query(collection(liveDb, "notifications"), where("uid", "==", uid), orderBy("createdAt", "desc"), limit(20)) : null,
+    [on, uid],
+  );
+  const alertsQ = useQuery<PriceAlert>(
+    liveDb && uid ? query(collection(liveDb, "alerts"), where("uid", "==", uid), where("status", "==", "active")) : null,
+    [on, uid],
+  );
+
+  // Record activity once per page load. The recap and the previous-session
+  // snapshot are kept in sessionStorage so a reload doesn't lose them (the
+  // second touch would only see this session's snapshot).
+  const [recap, setRecap] = useState<Recap | null>(null);
+  const [previousSession, setPreviousSession] = useState<SeenSnapshot | null>(null);
+  const [sessionKnown, setSessionKnown] = useState(false);
   const touched = useRef<string | null>(null);
   useEffect(() => {
-    if (meDoc.data && uid && touched.current !== uid) {
-      touched.current = uid;
-      api.touch().catch(() => undefined);
+    if (!meDoc.data || !uid || touched.current === uid) return;
+    touched.current = uid;
+    const recapKey = `fsm:recap:${uid}`;
+    const prevKey = `fsm:previous:${uid}`;
+    const storedRecap = sessionStorage.getItem(recapKey);
+    if (storedRecap) setRecap(JSON.parse(storedRecap) as Recap);
+    const storedPrev = sessionStorage.getItem(prevKey);
+    if (storedPrev) {
+      setPreviousSession(JSON.parse(storedPrev) as SeenSnapshot | null);
+      setSessionKnown(true);
     }
+    api
+      .touch()
+      .then((res) => {
+        if (res.recap) {
+          sessionStorage.setItem(recapKey, JSON.stringify(res.recap));
+          setRecap(res.recap);
+        }
+        if (storedPrev === null) {
+          sessionStorage.setItem(prevKey, JSON.stringify(res.previous));
+          setPreviousSession(res.previous);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => setSessionKnown(true));
   }, [meDoc.data, uid]);
+  const dismissRecap = useCallback(() => {
+    if (uid) sessionStorage.removeItem(`fsm:recap:${uid}`);
+    setRecap(null);
+  }, [uid]);
+
+  const marketReady = on && !stocksQ.loading && !playersQ.loading && !holdingsQ.loading && !openShortsQ.loading;
 
   const value = useMemo<GameContextValue>(() => {
     const stocks = stocksQ.data;
@@ -140,45 +197,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const photoById = new Map(photosQ.data.map((p) => [p.uid, p.dataUrl]));
     const stockById = new Map(stocks.map((s) => [s.id, s]));
     const tickers = assignTickers(stocks);
-    const priceOf = (id: string) => {
-      const s = stockById.get(id);
-      return s && s.listed ? s.price : undefined;
-    };
     const byUid = new Map<string, Holding[]>();
-    for (const h of holdingsQ.data) {
-      const list = byUid.get(h.uid) ?? [];
-      list.push(h);
-      byUid.set(h.uid, list);
-    }
-    // Open shorts by owner, to subtract their liability from net worth (Option B).
-    const shortsByOwner = new Map<string, Short[]>();
-    for (const s of openShortsQ.data) {
-      const list = shortsByOwner.get(s.ownerId) ?? [];
-      list.push(s);
-      shortsByOwner.set(s.ownerId, list);
-    }
-    const liabilityOf = (ownerUid: string) => {
-      const list = shortsByOwner.get(ownerUid);
-      if (!list || list.length === 0) return 0;
-      return shortsLiability(list, (i) => {
-        const stock = stockById.get(list[i].stockId);
-        if (!stock || !stock.listed || !(stock.poolShares > list[i].shares)) return undefined;
-        try {
-          return quoteCloseShort(stock, list[i].shares, feePct).cost;
-        } catch {
-          return undefined;
-        }
-      });
-    };
+    for (const h of holdingsQ.data) byUid.set(h.uid, [...(byUid.get(h.uid) ?? []), h]);
+    // Same maths as the server's touch/recap: net worth less open-short liability, then rank.
+    const standings = computeStandings(playersQ.data, stocks, holdingsQ.data, openShortsQ.data, feePct);
     const players: PlayerView[] = playersQ.data.map((p) => {
-      const holdingsValue = netWorth(p.cash, byUid.get(p.uid) ?? [], priceOf) - p.cash;
-      const nw = p.cash + holdingsValue - liabilityOf(p.uid);
-      return {
-        ...p,
-        netWorth: nw,
-        holdingsValue,
-        score: leaderboardScore(nw, p.startingCash, p.totalAllowances),
-      };
+      const s = standings.get(p.uid)!;
+      return { ...p, netWorth: s.netWorth, holdingsValue: s.holdingsValue, score: s.score, rank: s.rank };
     });
     return {
       configured: firebaseConfigured,
@@ -204,8 +229,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
       myShorts: uid ? openShortsQ.data.filter((s) => s.ownerId === uid) : [],
       photoOf: (id: string) => photoById.get(id),
       tickerOf: (id: string) => tickers.get(id) ?? "",
+      marketReady,
+      recap,
+      dismissRecap,
+      previousSession,
+      sessionKnown,
+      notifications: notificationsQ.data,
+      myAlerts: alertsQ.data,
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data, marketReady, recap, dismissRecap, previousSession, sessionKnown, notificationsQ.data, alertsQ.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

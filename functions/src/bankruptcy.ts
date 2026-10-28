@@ -1,6 +1,7 @@
 import { FieldValue, type Transaction } from "firebase-admin/firestore";
-import { settleDebt, type Creditor, type Holding, type Player, type Stock } from "@fsm/shared";
+import { bankruptcyMessage, priceTick, settleDebt, type Creditor, type Holding, type Player, type Stock } from "@fsm/shared";
 import { auditEntry, auditRef, refs } from "./common";
+import { enqueueDiscord } from "./discord";
 
 /**
  * Settle a player's debt, liquidating their holdings and paying creditors
@@ -24,6 +25,7 @@ export function applyBankruptcySettlement(
   creditors: Creditor[],
   feePct: number,
   now: number,
+  week: number,
 ): ReturnType<typeof settleDebt> {
   const holdings = debtorHoldings
     .filter((h) => h.shares > 0 && stockOf.has(h.stockId))
@@ -39,7 +41,10 @@ export function applyBankruptcySettlement(
     const s = stockOf.get(sale.stockId)!;
     const newShares = s.poolShares + sale.shares;
     const newCash = (s.poolCash * s.poolShares) / newShares;
-    tx.update(refs.stock(s.id), { poolShares: newShares, poolCash: newCash, k: newShares * newCash, price: newCash / newShares });
+    const price = newCash / newShares;
+    // Keep sparklines and records honest; fire sales don't get their own Discord post.
+    const { recentPrices, allTimeHigh, allTimeLow } = priceTick(s, price, week).patch;
+    tx.update(refs.stock(s.id), { poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, recentPrices, allTimeHigh, allTimeLow });
     tx.delete(refs.holding(debtor.uid, sale.stockId));
   }
 
@@ -54,6 +59,7 @@ export function applyBankruptcySettlement(
     ...(result.bankrupt ? { isActive: false, bankruptAt: now } : {}),
   });
 
+  if (result.bankrupt) enqueueDiscord(tx, "high", "bankruptcy", bankruptcyMessage(debtor.uid, debtor.displayName, debt, result.shortfall), now);
   tx.set(
     auditRef(),
     auditEntry("system", result.bankrupt ? "bankruptcy" : "debtSettled", debtor.uid, {

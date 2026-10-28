@@ -33,6 +33,18 @@ service cloud.firestore {
     match /shorts/{id}         { allow read: if member(); allow write: if false; }
     match /config/{id}         { allow read: if signedIn(); allow write: if false; }
     match /content/{id}        { allow read: if signedIn(); allow write: if false; }
+    match /devlog/{id}         { allow read: if signedIn(); allow write: if false; }
+
+    // Private to their owner: your price alerts and in-app notifications.
+    match /alerts/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+    // discordOutbox / discordState are server-only and fall through to the deny-all below.
 
     match /registrations/{uid} {
       allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();

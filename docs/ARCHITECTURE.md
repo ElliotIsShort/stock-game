@@ -71,6 +71,12 @@ everywhere so the same types work on server, client and in stored reports.
 | `photo.ts` | Avatar validation: `parsePhotoDataUrl`, `PHOTO_SIZE_PX`, `MAX_PHOTO_BYTES`. |
 | `config.ts` | `DEFAULT_CONFIG`, `CONFIG_BOUNDS`, `mergeConfig`, `validateConfigPatch`. |
 | `ticker.ts` | Stock tickers: `validateTicker` (2–5 letters A–Z), `tickerCandidates`/`defaultTicker` (from the name), `assignTickers` (stored ticker, or a deterministic legacy default in listing order). |
+| `discord.ts` | `DiscordMessage` + builders (`bigTradeMessage`, `listingMessage`, `bankruptcyMessage`, `recordMessage`, `alertMessage`, `weeklyCloseMessage`, `digestMessage`), `renderWebhookBody` (token → mention, `allowed_mentions` = only resolved users, Discord length limits), `escapeUserText`, `rateDecision`. |
+| `stockStats.ts` | `priceTick` (recent prices + all-time high/low + once-a-week record announcements), `holdingAfterBuy`/`holdingAfterSell` (cost basis + holding run). |
+| `awards.ts` | `AWARD_META`, `computeAwards` (the five weekly awards), `badgesFor` (profile badges from reports). |
+| `standings.ts` | `computeStandings`: net worth (less open-short liability), score and rank, shared by the client and `touch`. |
+| `recap.ts` | `Recap`/`TouchResult` shapes, `recapTraders`. |
+| `alerts.ts` | `validateAlert`, `alertFires`, `alertSummary`. |
 | `schedule.ts` | `WEEKLY_CLOSE_SCHEDULE` (must match the cron in `weekly-close.yml`), `nextScheduledClose` (skips slots the cron would skip under `minHoursBetweenAutoCloses`; `due` while a just-passed slot hasn't closed yet), `formatCountdown`. |
 | `types.ts` | Every Firestore document shape (the data model). |
 
@@ -172,14 +178,19 @@ All documents live at the paths below. IDs and relationships:
 |---|---|---|
 | `config/global` | fixed | All of `GameConfig` (see §4.1). Readable by any signed-in user. |
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
-| `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`. |
-| `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`. |
-| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`. |
-| `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`. Flat (not nested) so "all holders of a stock" is one query. |
+| `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
+| `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session. |
+| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `recentPrices` (last 24 post-trade prices), `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). |
+| `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
-| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`). |
+| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`), optional `recentPrices` (the stock's recent prices up to this trade, for the feed sparkline). |
 | `posts/{id}` | auto | `authorId/Name` ("system"/"Market" for system posts), `taggedStockId/Name`, `text`, `linkedTradeId`, `linkedTradeSummary`, `reactions` (type→uid[]), `reactionCount`, `system`, `week`, `createdAt`. |
 | `photos/{uid}` | auth uid | `dataUrl`, `updatedAt`. Separate from the stock doc so price ticks don't resend image bytes. |
+| `devlog/{id}` | auto | `DevlogEntry`: `title`, `body` (same markup as Rules), `date` (noon UTC of the shown day), `createdAt`, `updatedAt`. Readable by anyone signed in; kept by a reset. |
+| `alerts/{id}` | auto | `PriceAlert`: `uid`, `stockId/Name`, `direction` (above/below), `price`, `discord`, `status` (active/triggered/cancelled), `createdAt`, `triggeredAt/Price`. Owner-only reads. |
+| `notifications/{id}` | auto | `AppNotification`: `uid`, `kind` ("alert"), `title`, `body`, `stockId`, `createdAt`, `read`. Owner-only reads. |
+| `discordOutbox/{id}` | auto | `DiscordOutboxItem`: `priority` (high/normal), `kind`, `message` (`DiscordMessage` with `{@uid}` tokens), `status` (pending → sent/queued/digested/failed/skipped). Server-only. |
+| `discordState/rate` | fixed | `{ windowStart, sent }`: the hourly routine-post counter. Server-only. |
 | `netWorthHistory/{uid}` | auth uid | `points[]` of `{week, t, v}`, one appended per weekly close, capped to 104. |
 | `weeklyReports/week-NNNN` | zero-padded week | Full `WeeklyReport` payload + rendered `markdown`. |
 | `registrations/{uid}` | auth uid | `displayName`, `email`, `status` (pending/approved/rejected), `createdAt`, `decidedAt/By` (+ a `displayNameLower` for uniqueness). |
@@ -220,6 +231,11 @@ stored list.
 | `shortBorrowFeePct` | 0.02 | Weekly borrow fee on each open short's value. |
 | `prizeSplitPct` | [0.6, 0.25, 0.15] | Weekly prize split by growth rank; entries used are rescaled to sum to 1. |
 | `tickerChangeCooldownHours` | 24 | Min hours between a player's own ticker changes (admins bypass). 0 disables. |
+| `discordEnabled` | 1 | 1 = post to the webhook (if the secret is set), 0 = off (items are marked `skipped`). |
+| `discordBigTradePct` | 0.4 | A trade/short at least this × `state.avgNetWorth` is posted. |
+| `discordMaxPerHour` | 6 | Routine posts per clock hour; the rest are digested. 0 = digest all routine posts. |
+| `recapAfterHours` | 48 | Hours without activity before `touch` returns a recap. |
+| `maxActiveAlerts` | 10 | Active price alerts per player. |
 
 ---
 
@@ -245,14 +261,23 @@ helpers.
 | `trade` | trading.ts | player | Buy (spend cash, fee off the top) or sell (shares). Updates wallet + holding, applies the pool, adds fee to prize pool + week fees, writes the Trade and an optional linked Post. |
 | `openShort` / `closeShort` | shorts.ts | player | Open/close a synthetic short; enforces the exposure cap; fee → prize pool; close can trigger bankruptcy settlement. |
 | `createPost` / `toggleReaction` / `deletePost` | social.ts | player / player / admin | Standalone/tagged/trade-linked posts (cooldown + length limits), toggle a reaction, admin moderation (keeps text in the audit log). |
-| `touch` | adminOps.ts | player | Records activity once per session; silently reactivates idle players (no back-pay). |
+| `touch` | recap.ts | player | Once per page load: records activity, silently reactivates idle players (no back-pay), writes `seenSnapshot` (net worth + rank via `computeStandings`), returns the previous snapshot and, after `recapAfterHours`, a `Recap`. |
+| `discordDeliver` | discord.ts | Firestore trigger | On `discordOutbox` create: skip if disabled/no secret; `high` posts now; `normal` goes through `rateDecision` (hourly bucket in `discordState/rate`) or is `queued`. Resolves `{@uid}` tokens to `<@discordId>` at send time. |
+| `discordDigest` / `sendDiscordDigest` | discord.ts | hourly schedule / admin | Posts all `queued` items as one digest (no pings), marks them `digested`. |
+| `testDiscord` | discord.ts | admin | Posts a test message straight to the webhook and reports Discord's answer. |
+| `setDiscordId` | discord.ts | player | Link/unlink your Discord user ID (17–20 digits, unique across players). |
+| `createAlert` / `cancelAlert` | alerts.ts | player | Price alerts (`validateAlert`, capped at `maxActiveAlerts`). |
+| `checkPriceAlerts` | alerts.ts | Firestore trigger | On `stocks/{id}` update with a price change: fires due alerts once each (per-alert transaction), writes a notification, optionally queues a high-priority Discord @mention. |
+| `markNotificationsRead` | alerts.ts | player | Marks some or all of your notifications read. |
 | `updateConfig` | adminOps.ts | admin | Validates and merges a config patch; audits before/after. |
 | `delistPlayer` | adminOps.ts | admin | Pays every holder out at the last price, unlists the stock, deactivates the account, system post, audit. |
 | `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. |
 | `weeklyCloseCron` | adminOps.ts | bearer secret | HTTPS endpoint for the GitHub Actions cron; POST only, `Authorization: Bearer <CRON_SECRET>` (timing-safe, ≥16 chars); self-skips inside `minHoursBetweenAutoCloses`. |
 | `setStockPhoto` | photo.ts | player / admin | Set/remove your own avatar (validated); admins may only remove others'. |
 | `renamePlayer` | rename.ts | admin | Renames player/stock/registration, then rewrites denormalised names across past trades/posts via a bulkWriter. |
-| `updateContent` | content.ts | admin | Patches the Rules / Change log markdown on `content/global`. |
+| `updateContent` | content.ts | admin | Patches the Rules markdown on `content/global` (the legacy `changelog` field is still accepted but no longer edited in the UI). |
+| `saveDevlogEntry` / `deleteDevlogEntry` | content.ts | admin | Create/edit (pass `id`) or delete a dev diary entry (`validateDevlogEntry`); deletes keep the text in the audit log. |
+| `importDevlog` | content.ts | admin | Splits the built-in `DEFAULT_CHANGELOG` (one entry per `# ` heading, optional `Date:` line) into `devlog` entries; skips titles that already exist. |
 | `resetGame` | reset.ts | admin | Wipe-to-day-one (see §9 and the README). Not a single transaction. |
 
 ### 5.1 Weekly close ordering (`weeklyClose.ts`)
@@ -311,10 +336,12 @@ Firestore live and writes only through callable functions.
   motion it is a static swipeable row.
 - `components/AccountMenu.tsx` — avatar dropdown in the top bar (after
   easyui's origin-dropdown): name/email, cash, net worth, week, then My stock,
-  Rules, Change log, Preferences (theme Auto/Light/Dark as `menuitemradio`,
+  Rules, Dev diary (with a dot on the avatar and menu item while the latest
+  entry is unread on this device), Preferences (theme Auto/Light/Dark as `menuitemradio`,
   Sounds as `menuitemcheckbox`), and Sign out. This is where future account
   options should go. Full menu-button keyboard support (arrows, Home/End, Esc
   returns focus, Tab closes).
+- **Session + moments.** `GameProvider` keeps `touch`'s `recap` and `previousSession` in sessionStorage (a reload's second touch would only see this session). `RecapCard` sits at the top of `<main>` until dismissed. `Moments` shows `ResultsModal` for the latest close if it happened since your previous session and this device hasn't shown it (`fsm:resultsSeen:<uid>`), and fires confetti + a banner when your rank becomes 1 (compared with your last session, then live; it waits 2s after `marketReady` so load-order flicker can't trigger it). `NotificationBell` (top bar) lists your notifications and toasts new ones.
 - **Preferences** (`lib/prefs.ts`) are per-device in localStorage, never in
   Firestore. Theme sets `<html data-theme>`; `THEME_BOOT_SCRIPT` (inlined in
   the layout `<head>`) applies it before first paint, and `ClientEffects`
@@ -334,11 +361,12 @@ Firestore live and writes only through callable functions.
 |---|---|
 | `/` | Feed: prize-pool pill, post composer, global chronological feed. |
 | `/market` | Sortable table of listed stocks (price, week change, trades, your holdings, tickers), median price. |
-| `/stock?id=` | Stock detail: avatar, ticker, price, week stats, pool depth, price chart, `TradePanel`, `ShortPanel`, "Your stock" (`TickerEditor` + `PhotoEditor`, own only), holders, scoped feed. |
+| `/stock?id=` | Profile header (avatar, ticker, price, week stats, pool depth, all-time high/low) with two tabs (`&tab=player` selects the second; `profileHref`). **Stock**: price chart, `TradePanel`, `ShortPanel`, `AlertPanel`, "Your stock" (`TickerEditor` + `PhotoEditor`, own only), holders, scoped feed. **Player** (`PlayerProfile`): stats, badges, net worth, best/worst calls, weekly results, recent trades, and `DiscordLink` on your own. |
 | `/portfolio` | Cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, open shorts (live P/L), CEO-bonus summary, recent trades. |
 | `/leaderboard` | Ranked by score (idle greyed and unranked), live prize positions + projected "Prize now" share per player. |
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
-| `/rules`, `/changelog` | Editable `content/global`, rendered with `SimpleMarkdown`. Reached from the account menu. |
+| `/rules` | Editable `content/global.rules`, rendered with `SimpleMarkdown`. Reached from the account menu. |
+| `/changelog` + `/changelog?id=` | The Dev diary: list of `devlog` entries, and a single entry with older/newer links. Reached from the account menu. |
 | `/admin` | Approvals, Players (+rename), Weekly close, Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |
 
 **Components:** `Feed`, `TradePanel` (live AMM preview using the shared quote
@@ -406,7 +434,11 @@ respects `prefers-reduced-motion`.
   `isPlayer` (a `players/{uid}` doc exists), `member` (player or admin). Members
   read game collections; any signed-in user reads `config`/`content`; a player
   reads their own `players` doc and `registrations`; `admins/{uid}` is readable
-  only by that uid; `auditLog` is admin-only; everything else is denied.
+  only by that uid; `auditLog` is admin-only; `alerts` and `notifications` are
+  readable only where `uid == auth.uid`; everything else (incl. `discordOutbox`,
+  `discordState`) is denied.
+- The Discord webhook URL is a Functions secret, validated to be a
+  `discord.com/api/webhooks/` URL (or localhost inside the emulator).
 - `firestore.indexes.json`: composite indexes for `trades(stockId+createdAt)`,
   `trades(traderId+createdAt)`, `posts(taggedStockId+createdAt)`,
   `registrations(status+createdAt)`, `shorts(ownerId+status)`.
@@ -474,7 +506,8 @@ full configurable-parameter set (§9).
 | **Admin rename** | `functions/rename.ts` | Renames a player and rewrites denormalised names across all past trades/posts. |
 | **Full reset** | `functions/reset.ts` | Wipe-to-day-one preserving accounts/admins/config/audit; re-queues players as pending. |
 | **Net-worth history + charts** | `netWorthHistory/{uid}`, `LineChart`, `PriceChart` | Weekly per-player samples (capped 104) powering the Portfolio and stock charts. |
-| **Editable Rules & Change log** | `shared/content.ts`, `functions/content.ts`, `/rules`, `/changelog` | Admin-editable `content/global`, rendered with `SimpleMarkdown`. |
+| **Editable Rules** | `shared/content.ts`, `functions/content.ts`, `/rules` | Admin-editable `content/global`, rendered with `SimpleMarkdown`. |
+| **Dev diary** (was the change log) | `devlog/{id}`, `lib/devlog.ts`, `/changelog` (+ `?id=`), Admin → Dev diary | One entry per update (`DevlogEntry`: title, body, date). The page lists entries newest first (with a "New" badge for entries since your last visit, per device) and opens each on its own with older/newer links. Until any entry exists it shows the old `content.changelog` split by `# ` headings. |
 | **Audit log** | `auditLog/{id}`, Admin page | Every admin action records actor/target/details. |
 | **Post cooldown / spam guard** | `functions/social.ts`, `postCooldownSeconds` | Minimum seconds between a player's standalone posts. |
 | **Double-close protection** | `adminOps.ts` | Manual close carries the week number; cron enforces `minHoursBetweenAutoCloses`. |
@@ -482,7 +515,13 @@ full configurable-parameter set (§9).
 | **Close countdown + ticker tape** | `shared/schedule.ts`, `MarketStrip` | On every page under the top bar. |
 | **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |
 | **Mobile tab bar + installable PWA** | `Shell`, `app/manifest.ts`, `public/sw.js` | Bottom tabs on phones; Add to Home Screen. |
-| **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼; reactions bounce and their counts roll when they change live. |
+| **Feed polish** | `Feed.tsx` | Trade cards show ticker, £ / % price delta with ▲/▼ and a sparkline (`trade.recentPrices`); names link to profiles; reactions bounce and their counts roll when they change live. |
+| **Discord webhook** | `shared/discord.ts`, `functions/discord.ts`, `marketEvents.ts`, `DiscordLink`, Admin → Discord | Outbox + Firestore trigger, hourly rate limit + digest, @mentions for linked players. Webhook URL only in the `DISCORD_WEBHOOK_URL` secret. Slash commands are a possible next step (HTTP interactions endpoint). |
+| **Weekly awards + badges** | `shared/awards.ts`, `weeklyClose.ts` | Stored on `report.highlights.awards`; shown in the report, results screen, close post and as profile badges. |
+| **Recap** | `functions/recap.ts`, `RecapCard` | "While you were away" after `recapAfterHours`. |
+| **Moments** | `Moments`, `ResultsModal`, `lib/confetti.ts` | Results screen once per close; confetti + banner for winning the week or taking #1. |
+| **Price alerts + notifications** | `functions/alerts.ts`, `AlertPanel`, `NotificationBell` | In-app (bell + toast) and optional Discord. |
+| **Player profiles** | `PlayerProfile` (Player tab on `/stock`) | Stats, badges, net-worth chart, best/worst calls, weekly results, recent trades, Discord link. |
 
 ### 9.3 Deliberate deviations to be aware of
 - **Worked example mismatch:** the design doc's "Buy £500 → £64.00 (+28%)" row

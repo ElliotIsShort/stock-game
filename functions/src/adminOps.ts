@@ -6,23 +6,6 @@ import { mergeConfig, validateConfigPatch, type Holding, type Player, type Post,
 import { asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin, requireAuth } from "./common";
 import { closeWeek } from "./weeklyClose";
 
-/**
- * Called by the client on sign-in. Records activity and silently reactivates
- * idle players (§5, open decision §11: silent reactivation, no back-pay).
- */
-export const touch = onCall(async (req) => {
-  const uid = requireAuth(req);
-  const now = Date.now();
-  return db.runTransaction(async (tx) => {
-    const snap = await tx.get(refs.player(uid));
-    if (!snap.exists) return { player: false, reactivated: false };
-    const p = snap.data() as Player;
-    if (!p.isActive) return { player: true, reactivated: false };
-    tx.update(refs.player(uid), { lastActiveAt: now, isIdle: false });
-    return { player: true, reactivated: p.isIdle };
-  });
-});
-
 /** Admin: edit config/global. Unknown keys and out-of-range values are rejected. */
 export const updateConfig = onCall(async (req) => {
   const adminId = await requireAdmin(req);

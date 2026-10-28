@@ -39,3 +39,18 @@ export function changeClass(n: number): string {
 export function stockHref(id: string): string {
   return `/stock/?id=${encodeURIComponent(id)}`;
 }
+
+/** A player's profile: the Player tab of their stock page. */
+export function profileHref(id: string): string {
+  return `/stock/?id=${encodeURIComponent(id)}&tab=player`;
+}
+
+/** "3 days", "5 hours", "20 minutes". */
+export function duration(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"}`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} hour${h === 1 ? "" : "s"}`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? "" : "s"}`;
+}

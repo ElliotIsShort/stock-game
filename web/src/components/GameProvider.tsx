@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { collection, doc, query, where } from "firebase/firestore";
 import {
+  assignTickers,
   DEFAULT_CONFIG,
   leaderboardScore,
   mergeConfig,
@@ -58,6 +59,8 @@ interface GameContextValue {
   myShorts: Short[];
   /** Stock photo data URL by uid, if they've set one. */
   photoOf: (uid: string) => string | undefined;
+  /** A stock's ticker (stored, or the legacy default the server would assign). */
+  tickerOf: (stockId: string) => string;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -136,6 +139,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const feePct = (configDoc.data ? mergeConfig(configDoc.data) : DEFAULT_CONFIG).tradingFeePct;
     const photoById = new Map(photosQ.data.map((p) => [p.uid, p.dataUrl]));
     const stockById = new Map(stocks.map((s) => [s.id, s]));
+    const tickers = assignTickers(stocks);
     const priceOf = (id: string) => {
       const s = stockById.get(id);
       return s && s.listed ? s.price : undefined;
@@ -199,6 +203,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       myHoldings: uid ? (byUid.get(uid) ?? []) : [],
       myShorts: uid ? openShortsQ.data.filter((s) => s.ownerId === uid) : [],
       photoOf: (id: string) => photoById.get(id),
+      tickerOf: (id: string) => tickers.get(id) ?? "",
     };
   }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data]);
 

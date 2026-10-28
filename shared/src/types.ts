@@ -42,6 +42,8 @@ export interface GameConfig {
    * players than entries still drains the whole pool.
    */
   prizeSplitPct: number[];
+  /** Minimum hours between a player's ticker changes. 0 disables the cooldown. */
+  tickerChangeCooldownHours: number;
 }
 
 export interface GameState {
@@ -97,6 +99,13 @@ export interface Stock {
   weekLow: number;
   weekTradeCount: number;
   delistedAt?: number;
+  /**
+   * 2–5 letter ticker the owner picked (or was given at listing). Absent on
+   * stocks listed before tickers existed; use `assignTickers` to read it.
+   */
+  ticker?: string;
+  /** When the owner last changed their ticker (cooldown). */
+  tickerChangedAt?: number;
 }
 
 /** Stored at holdings/{uid}_{stockId}. */

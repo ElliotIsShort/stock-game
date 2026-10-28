@@ -1,10 +1,11 @@
 "use client";
 
 import { Fragment } from "react";
-import { prizeSplitText, weeklyGrowth, weeklyPrizeWinners } from "@fsm/shared";
+import { prizeSplitText } from "@fsm/shared";
 import { Avatar } from "@/components/Avatar";
 import { useGame } from "@/components/GameProvider";
 import { changeClass, gbp, pct } from "@/lib/format";
+import { liveContenders, liveGrowth } from "@/lib/standings";
 
 export default function LeaderboardPage() {
   const { players, me, state, config } = useGame();
@@ -12,16 +13,8 @@ export default function LeaderboardPage() {
   // Idle players are shown greyed and not ranked (§5).
   const ranked = listed.filter((p) => !p.isIdle).sort((a, b) => b.score - a.score);
   const idle = listed.filter((p) => p.isIdle).sort((a, b) => b.score - a.score);
-  // Live weekly growth so far (allowance for this week isn't paid until close).
-  const growthOf = (p: (typeof players)[0]) => weeklyGrowth(p.netWorthWeekStart, p.netWorth, 0);
-  // Who would share the prize pool if the week closed now (same eligibility + split as the close).
-  const contenders = state
-    ? weeklyPrizeWinners(
-        listed.map((p) => ({ playerId: p.uid, name: p.displayName, growth: growthOf(p), netWorthStart: p.netWorthWeekStart, isIdle: p.isIdle })),
-        state.prizePool,
-        config.prizeSplitPct,
-      )
-    : [];
+  const growthOf = liveGrowth;
+  const contenders = liveContenders(players, state, config);
   const projectedPrize = new Map(contenders.map((w) => [w.playerId, w.prizeAmount]));
 
   return (

@@ -8,15 +8,19 @@ import { SignIn } from "./SignIn";
 import { RegistrationGate } from "./Registration";
 import { AccountMenu } from "./AccountMenu";
 import { AnimatedNumber } from "./AnimatedNumber";
+import { MarketStrip } from "./MarketStrip";
+import { NavIcon } from "./NavIcons";
 
 const NAV = [
-  { href: "/", label: "Feed" },
-  { href: "/market/", label: "Market" },
-  { href: "/portfolio/", label: "Portfolio" },
-  { href: "/leaderboard/", label: "Leaderboard" },
-  { href: "/reports/", label: "Reports" },
+  { href: "/", label: "Feed", short: "Feed", icon: "feed" },
+  { href: "/market/", label: "Market", short: "Market", icon: "market" },
+  { href: "/portfolio/", label: "Portfolio", short: "Portfolio", icon: "portfolio" },
+  { href: "/leaderboard/", label: "Leaderboard", short: "Leaders", icon: "leaderboard" },
+  { href: "/reports/", label: "Reports", short: "Reports", icon: "reports" },
 ];
+const ADMIN_NAV = { href: "/admin/", label: "Admin", short: "Admin", icon: "admin" };
 // Rules and Change log live in the account menu to keep the nav short on phones.
+// On phones the top nav is replaced by a bottom tab bar (CSS switches between them).
 
 /** App chrome + gatekeeping: signed out → sign in; not approved → registration; else the page. */
 export function Shell({ children }: { children: ReactNode }) {
@@ -54,36 +58,48 @@ export function Shell({ children }: { children: ReactNode }) {
     );
   }
 
-  const nav = g.isAdmin ? [...NAV, { href: "/admin/", label: "Admin" }] : NAV;
+  const nav = g.isAdmin ? [...NAV, ADMIN_NAV] : NAV;
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
+  const current = (href: string) => (path === href || path === href.replace(/\/$/, "") ? "page" : undefined);
 
   return (
     <>
-      <header className="topbar">
-        <Link href="/" className="brand" aria-label="Stonker">
-          <span aria-hidden="true">📈</span>
-          <span>Stonker</span>
-        </Link>
-        <nav aria-label="Main">
-          {nav.map((n) => (
-            <Link key={n.href} href={n.href} aria-current={path === n.href || path === n.href.replace(/\/$/, "") ? "page" : undefined}>
-              {n.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="me">
-          {me && (
-            <span title="Cash / net worth">
-              <AnimatedNumber value={me.cash} /> <span className="muted">/ <AnimatedNumber value={me.netWorth} /></span>
-            </span>
-          )}
-          {g.state && <span className="muted me-week">Week {g.state.currentWeek}</span>}
-          <AccountMenu />
-        </div>
-      </header>
+      <div className="chrome">
+        <header className="topbar">
+          <Link href="/" className="brand" aria-label="Stonker">
+            <span aria-hidden="true">📈</span>
+            <span>Stonker</span>
+          </Link>
+          <nav aria-label="Main" className="topnav">
+            {nav.map((n) => (
+              <Link key={n.href} href={n.href} aria-current={current(n.href)}>
+                {n.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="me">
+            {me && (
+              <span title="Cash / net worth">
+                <AnimatedNumber value={me.cash} /> <span className="muted">/ <AnimatedNumber value={me.netWorth} /></span>
+              </span>
+            )}
+            {g.state && <span className="muted me-week">Week {g.state.currentWeek}</span>}
+            <AccountMenu />
+          </div>
+        </header>
+        <MarketStrip />
+      </div>
       {previewBanner}
       {g.me && !g.me.isActive && <div className="banner">Your stock has been delisted. You can browse but not trade.</div>}
       <main className="page">{children}</main>
+      <nav aria-label="Main" className="tabbar">
+        {nav.map((n) => (
+          <Link key={n.href} href={n.href} aria-current={current(n.href)}>
+            <NavIcon name={n.icon} />
+            <span>{n.short}</span>
+          </Link>
+        ))}
+      </nav>
     </>
   );
 }

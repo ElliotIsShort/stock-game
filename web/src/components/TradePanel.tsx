@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { quoteBuy, quoteSell, type Stock, type TradeSide } from "@fsm/shared";
 import { api, errorMessage } from "@/lib/api";
 import { changeClass, gbp, pct, shares } from "@/lib/format";
+import { playSound } from "@/lib/sound";
 import { useGame } from "./GameProvider";
 
 /**
@@ -46,6 +47,7 @@ export function TradePanel({ stock }: { stock: Stock }) {
     setDone(null);
     try {
       const t = await api.trade({ stockId: stock.id, side, amount: value, postText: postText.trim() || undefined });
+      playSound(t.side);
       setDone(`${t.side === "buy" ? "Bought" : "Sold"} ${shares(t.shares)} shares at avg ${gbp(Math.abs(t.netCash) / t.shares)}.`);
       setAmount("");
       setPostText("");

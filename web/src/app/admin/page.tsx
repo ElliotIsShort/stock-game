@@ -54,9 +54,19 @@ export default function AdminPage() {
 
 /** Player roster: last online, idle/bankrupt status, and rename. */
 function Players() {
-  const { players } = useGame();
+  const { players, stockById, tickerOf } = useGame();
   const { busy, run, view } = useAction();
   const roster = [...players].sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+
+  function retick(uid: string, name: string) {
+    const current = tickerOf(uid);
+    const next = window.prompt(`New ticker for ${name} (2–5 letters):`, current);
+    if (!next || next.trim().toUpperCase() === current) return;
+    run(async () => {
+      const res = await api.setTicker(next.trim(), uid);
+      return `${name} now trades as $${res.ticker}.`;
+    });
+  }
 
   function rename(uid: string, current: string) {
     const next = window.prompt(`New name for ${current}:`, current);
@@ -89,8 +99,13 @@ function Players() {
                 <td className="muted small">
                   {!p.isActive ? "deactivated" : p.isIdle ? "idle" : "active"}
                 </td>
-                <td>
+                <td className="row">
                   <button type="button" className="link small" disabled={busy} onClick={() => rename(p.uid, p.displayName)}>Rename</button>
+                  {stockById.has(p.uid) && (
+                    <button type="button" className="link small" disabled={busy} onClick={() => retick(p.uid, p.displayName)}>
+                      Ticker (${tickerOf(p.uid)})
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

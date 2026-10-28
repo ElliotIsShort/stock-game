@@ -70,6 +70,8 @@ everywhere so the same types work on server, client and in stored reports.
 | `content.ts` | `SiteContent` (rules + changelog), defaults, `MAX_CONTENT_LENGTH`. |
 | `photo.ts` | Avatar validation: `parsePhotoDataUrl`, `PHOTO_SIZE_PX`, `MAX_PHOTO_BYTES`. |
 | `config.ts` | `DEFAULT_CONFIG`, `CONFIG_BOUNDS`, `mergeConfig`, `validateConfigPatch`. |
+| `ticker.ts` | Stock tickers: `validateTicker` (2–5 letters A–Z), `tickerCandidates`/`defaultTicker` (from the name), `assignTickers` (stored ticker, or a deterministic legacy default in listing order). |
+| `schedule.ts` | `WEEKLY_CLOSE_SCHEDULE` (must match the cron in `weekly-close.yml`), `nextScheduledClose` (skips slots the cron would skip under `minHoursBetweenAutoCloses`; `due` while a just-passed slot hasn't closed yet), `formatCountdown`. |
 | `types.ts` | Every Firestore document shape (the data model). |
 
 ### 3.1 The AMM (`amm.ts`)
@@ -172,7 +174,7 @@ All documents live at the paths below. IDs and relationships:
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
 | `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`. |
 | `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`. |
-| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`. |
+| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`. Flat (not nested) so "all holders of a stock" is one query. |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
 | `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`). |
@@ -217,6 +219,7 @@ stored list.
 | `maxShortExposurePct` | 0.5 | Max open-short value as a fraction of capital. |
 | `shortBorrowFeePct` | 0.02 | Weekly borrow fee on each open short's value. |
 | `prizeSplitPct` | [0.6, 0.25, 0.15] | Weekly prize split by growth rank; entries used are rescaled to sum to 1. |
+| `tickerChangeCooldownHours` | 24 | Min hours between a player's own ticker changes (admins bypass). 0 disables. |
 
 ---
 
@@ -236,7 +239,8 @@ helpers.
 | Function | File | Access | What it does |
 |---|---|---|---|
 | `register` | approval.ts | signed-in | Request to join (name uniqueness check); writes a pending registration. No funds. |
-| `approvePlayer` | approval.ts | admin | Atomically creates the Player (with catch-up `startingCash`), creates a listed Stock at `listingPrice`, sizes the pool via `listingPool` (avg net worth incl. the newcomer), posts a system listing message, audits. |
+| `approvePlayer` | approval.ts | admin | Atomically creates the Player (with catch-up `startingCash`), creates a listed Stock at `listingPrice` with a default unique `ticker`, sizes the pool via `listingPool` (avg net worth incl. the newcomer), backfills legacy tickers, posts a system listing message, audits. |
+| `setTicker` | ticker.ts | player / admin | Change your own ticker (unique across all stocks, `tickerChangeCooldownHours`); admins may change anyone's (no cooldown, audited). Backfills legacy tickers; posts "X now trades as $NEW (was $OLD)". |
 | `rejectPlayer` | approval.ts | admin | Marks a registration rejected. |
 | `trade` | trading.ts | player | Buy (spend cash, fee off the top) or sell (shares). Updates wallet + holding, applies the pool, adds fee to prize pool + week fees, writes the Trade and an optional linked Post. |
 | `openShort` / `closeShort` | shorts.ts | player | Open/close a synthetic short; enforces the exposure cap; fee → prize pool; close can trigger bankruptcy settlement. |
@@ -294,21 +298,43 @@ Firestore live and writes only through callable functions.
   derives `PlayerView` (net worth, holdings value, score); calls `api.touch()`
   once per session. `useGame()` exposes it all.
 - `components/Shell.tsx` — gatekeeping: not configured → setup notice; signed
-  out → `SignIn`; not approved → `Registration`; otherwise the nav + page.
-  Nav: Feed, Market, Portfolio, Leaderboard, Reports (+ Admin). On phones it is
-  a single horizontally-swipeable row.
+  out → `SignIn`; not approved → `Registration`; otherwise the chrome + page.
+  Nav: Feed, Market, Portfolio, Leaderboard, Reports (+ Admin). The sticky
+  `.chrome` holds the top bar and the `MarketStrip`. At ≤600px the top nav is
+  hidden and a fixed bottom tab bar (`.tabbar`, icons in `NavIcons.tsx`,
+  safe-area aware) takes over; both navs are rendered and CSS picks one.
+- `components/MarketStrip.tsx` — on every page: close countdown
+  (`nextScheduledClose`, ticking via `useNow`) + the current top weekly grower
+  (`lib/standings.ts` `liveContenders`, shared with `/leaderboard`), then a
+  scrolling ticker tape of every listed stock (ticker, price, ▲/▼ week change,
+  flashes on live price moves). The tape pauses on hover/focus; under reduced
+  motion it is a static swipeable row.
 - `components/AccountMenu.tsx` — avatar dropdown in the top bar (after
   easyui's origin-dropdown): name/email, cash, net worth, week, then My stock,
-  Rules, Change log, a disabled "Preferences — coming soon" slot, and Sign out.
-  This is where future account options should go. Full menu-button keyboard
-  support (arrows, Home/End, Esc returns focus, Tab closes).
+  Rules, Change log, Preferences (theme Auto/Light/Dark as `menuitemradio`,
+  Sounds as `menuitemcheckbox`), and Sign out. This is where future account
+  options should go. Full menu-button keyboard support (arrows, Home/End, Esc
+  returns focus, Tab closes).
+- **Preferences** (`lib/prefs.ts`) are per-device in localStorage, never in
+  Firestore. Theme sets `<html data-theme>`; `THEME_BOOT_SCRIPT` (inlined in
+  the layout `<head>`) applies it before first paint, and `ClientEffects`
+  follows the OS while set to Auto. The light palette is the
+  `:root[data-theme="light"]` block in `globals.css` — use the variables
+  (`--on-accent`, `--banner-bg`, `--shadow`, `color-mix(...)` for tints), never
+  hard-coded colours. Sounds (`lib/sound.ts`) are synthesised with Web Audio,
+  **off by default**, and played on trades, shorts and reactions.
+- **PWA** — `app/manifest.ts` (basePath-aware), icons in `public/icons/` +
+  `app/apple-icon.png` (regenerate with `node scripts/generate-icons.mjs`), and
+  `public/sw.js` (cache-first for hashed `/_next/static/`, network-first for
+  pages, ignores cross-origin Firebase traffic). `ClientEffects` registers it
+  in production builds only. Bump `VERSION` in `sw.js` to drop old caches.
 
 **Routes (`app/`)**
 | Path | Screen |
 |---|---|
 | `/` | Feed: prize-pool pill, post composer, global chronological feed. |
-| `/market` | Sortable table of listed stocks (price, week change, trades, your holdings), median price. |
-| `/stock?id=` | Stock detail: avatar, price, week stats, pool depth, price chart, `TradePanel`, `ShortPanel`, `PhotoEditor` (own), holders, scoped feed. |
+| `/market` | Sortable table of listed stocks (price, week change, trades, your holdings, tickers), median price. |
+| `/stock?id=` | Stock detail: avatar, ticker, price, week stats, pool depth, price chart, `TradePanel`, `ShortPanel`, "Your stock" (`TickerEditor` + `PhotoEditor`, own only), holders, scoped feed. |
 | `/portfolio` | Cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, open shorts (live P/L), CEO-bonus summary, recent trades. |
 | `/leaderboard` | Ranked by score (idle greyed and unranked), live prize positions + projected "Prize now" share per player. |
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
@@ -452,6 +478,11 @@ full configurable-parameter set (§9).
 | **Audit log** | `auditLog/{id}`, Admin page | Every admin action records actor/target/details. |
 | **Post cooldown / spam guard** | `functions/social.ts`, `postCooldownSeconds` | Minimum seconds between a player's standalone posts. |
 | **Double-close protection** | `adminOps.ts` | Manual close carries the week number; cron enforces `minHoursBetweenAutoCloses`. |
+| **Tickers** | `shared/ticker.ts`, `functions/ticker.ts`, `TickerEditor` | Players pick a unique 2–5 letter ticker; default from their name at listing. Shown on the market, stock page, feed trade cards and the tape. |
+| **Close countdown + ticker tape** | `shared/schedule.ts`, `MarketStrip` | On every page under the top bar. |
+| **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |
+| **Mobile tab bar + installable PWA** | `Shell`, `app/manifest.ts`, `public/sw.js` | Bottom tabs on phones; Add to Home Screen. |
+| **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼; reactions bounce and their counts roll when they change live. |
 
 ### 9.3 Deliberate deviations to be aware of
 - **Worked example mismatch:** the design doc's "Buy £500 → £64.00 (+28%)" row

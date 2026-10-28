@@ -4,8 +4,16 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { gbp, stockHref } from "@/lib/format";
+import { setPrefs, usePrefs, type ThemePref } from "@/lib/prefs";
+import { playSound } from "@/lib/sound";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
+
+const THEMES: { value: ThemePref; label: string; icon: string }[] = [
+  { value: "system", label: "Auto", icon: "◐" },
+  { value: "light", label: "Light", icon: "☀" },
+  { value: "dark", label: "Dark", icon: "☾" },
+];
 
 /**
  * Account dropdown in the top bar (after easyui's origin-dropdown): the menu
@@ -13,7 +21,8 @@ import { useGame } from "./GameProvider";
  * Keyboard: Enter/Space/↓ opens, ↑/↓/Home/End move, Esc closes and returns
  * focus to the trigger, Tab closes.
  *
- * New account options (e.g. preferences) go in the item list below.
+ * New account options go in the item list below. Preferences (theme, sound)
+ * are per-device and live in lib/prefs.ts.
  */
 export function AccountMenu() {
   const g = useGame();
@@ -25,6 +34,7 @@ export function AccountMenu() {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const prefs = usePrefs();
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
   const name = me?.displayName ?? g.user?.displayName ?? g.user?.email ?? "Account";
   const uid = me?.uid ?? g.user?.uid ?? "";
@@ -42,7 +52,11 @@ export function AccountMenu() {
     return () => document.removeEventListener("pointerdown", onDown);
   }, [open]);
 
-  const items = () => [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [])];
+  const items = () => [
+    ...(menuRef.current?.querySelectorAll<HTMLElement>(
+      ':is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]):not([aria-disabled="true"])',
+    ) ?? []),
+  ];
   const focusItem = (which: "first" | "last") => {
     // Wait a frame so the menu is visible (and focusable) before moving focus.
     requestAnimationFrame(() => {
@@ -154,10 +168,37 @@ export function AccountMenu() {
         )}
         <MenuLink href="/rules/" onSelect={() => setOpen(false)}>Rules</MenuLink>
         <MenuLink href="/changelog/" onSelect={() => setOpen(false)}>Change log</MenuLink>
-        <div role="menuitem" aria-disabled="true" className="account-item disabled">
-          <span>Preferences</span>
-          <span className="muted small">Coming soon</span>
+
+        <div className="account-sep" role="separator" />
+        <div className="account-label muted small" role="presentation">Preferences</div>
+        <div className="account-theme" role="group" aria-label="Theme">
+          {THEMES.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={prefs.theme === t.value}
+              className="account-theme-option"
+              onClick={() => setPrefs({ theme: t.value })}
+            >
+              <span aria-hidden="true">{t.icon}</span> {t.label}
+            </button>
+          ))}
         </div>
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={prefs.sound}
+          className="account-item account-toggle"
+          onClick={() => {
+            setPrefs({ sound: !prefs.sound });
+            // A preview, so you know it's working (only plays when turning on).
+            playSound("success");
+          }}
+        >
+          <span>Sounds</span>
+          <span className="switch" aria-hidden="true" data-on={prefs.sound || undefined} />
+        </button>
 
         <div className="account-sep" role="separator" />
         <button

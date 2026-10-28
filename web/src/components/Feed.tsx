@@ -7,7 +7,8 @@ import { REACTION_EMOJI, REACTION_TYPES, type Post, type ReactionType, type Trad
 import { fb } from "@/lib/firebase";
 import { prefersReducedMotion, useMediaQuery, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
-import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
+import { ago, changeClass, gbp, pct, shares, signedGbp, stockHref } from "@/lib/format";
+import { playSound } from "@/lib/sound";
 import { feedCutoff } from "@/lib/pagination";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
@@ -99,8 +100,8 @@ function PagedFeed({ stockId, pageSize }: { stockId?: string; pageSize: number }
   function changePage(next: number) {
     setPage(next);
     const el = sectionRef.current;
-    // Bring the top of the feed back into view if you've scrolled past it (or it's under the sticky top bar).
-    if (el && el.getBoundingClientRect().top < 64) el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    // Bring the top of the feed back into view if you've scrolled past it (or it's under the sticky top bar + strip).
+    if (el && el.getBoundingClientRect().top < 100) el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
   }
 
   const error = tradesQ.error ?? postsQ.error;
@@ -142,7 +143,7 @@ function useFetchedLimit<T>(data: T[], limitNow: number): number {
 }
 
 function TradeItem({ trade }: { trade: Trade }) {
-  const { me } = useGame();
+  const { me, tickerOf } = useGame();
   const [annotating, setAnnotating] = useState(false);
   const move = trade.priceAfter / trade.priceBefore - 1;
   const mine = me?.uid === trade.traderId;
@@ -160,8 +161,12 @@ function TradeItem({ trade }: { trade: Trade }) {
         </span>
         <time className="muted small" dateTime={new Date(trade.createdAt).toISOString()}>{ago(trade.createdAt)}</time>
       </div>
-      <div className="small muted">
-        {gbp(trade.priceBefore)} → {gbp(trade.priceAfter)} <span className={changeClass(move)}>{pct(move)}</span>
+      <div className="small muted trade-move">
+        <span className="ticker-chip">${tickerOf(trade.stockId)}</span>
+        <span>{gbp(trade.priceBefore)} → {gbp(trade.priceAfter)}</span>
+        <span className={`delta ${changeClass(move)}`}>
+          <span aria-hidden="true">{move > 0.00005 ? "▲" : move < -0.00005 ? "▼" : "■"}</span> {signedGbp(trade.priceAfter - trade.priceBefore)} ({pct(move)})
+        </span>
       </div>
       {mine && !trade.linkedPostId && (
         annotating ? (
@@ -171,6 +176,51 @@ function TradeItem({ trade }: { trade: Trade }) {
         )
       )}
     </article>
+  );
+}
+
+/**
+ * A reaction chip. Your own tap makes the emoji bounce; any change to the
+ * count (yours or someone else's, arriving live) rolls the number in.
+ * Both animations are CSS and switch off under prefers-reduced-motion.
+ */
+function ReactionButton({
+  type,
+  count,
+  active,
+  disabled,
+  onReact,
+}: {
+  type: ReactionType;
+  count: number;
+  active: boolean;
+  disabled: boolean;
+  onReact: () => void;
+}) {
+  const [bounce, setBounce] = useState(0);
+  const prev = useRef(count);
+  const dir = count > prev.current ? "up" : count < prev.current ? "down" : null;
+  useEffect(() => {
+    prev.current = count;
+  }, [count]);
+  return (
+    <button
+      type="button"
+      className={`reaction${active ? " active" : ""}`}
+      aria-pressed={active}
+      aria-label={`${type} (${count})`}
+      disabled={disabled}
+      onClick={() => {
+        if (!active) playSound("react");
+        setBounce((b) => b + 1);
+        onReact();
+      }}
+    >
+      <span key={bounce} className={bounce ? "reaction-emoji bounce" : "reaction-emoji"}>{REACTION_EMOJI[type]}</span>
+      {count > 0 && (
+        <span key={count} className={`reaction-count${dir ? ` roll-${dir}` : ""}`}>{count}</span>
+      )}
+    </button>
   );
 }
 
@@ -215,19 +265,15 @@ function PostItem({ post }: { post: Post }) {
         <div className="reactions" role="group" aria-label="Reactions">
           {REACTION_TYPES.map((r) => {
             const list = post.reactions?.[r] ?? [];
-            const active = me ? list.includes(me.uid) : false;
             return (
-              <button
+              <ReactionButton
                 key={r}
-                type="button"
-                className={`reaction${active ? " active" : ""}`}
-                aria-pressed={active}
-                aria-label={`${r} (${list.length})`}
+                type={r}
+                count={list.length}
+                active={me ? list.includes(me.uid) : false}
                 disabled={!me?.isActive}
-                onClick={() => react(r)}
-              >
-                {REACTION_EMOJI[r]} {list.length > 0 ? list.length : ""}
-              </button>
+                onReact={() => react(r)}
+              />
             );
           })}
           {isAdmin && (

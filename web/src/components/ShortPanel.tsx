@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { quoteCloseShort, quoteOpenShort, shortUnrealised, type Stock } from "@fsm/shared";
 import { api, errorMessage } from "@/lib/api";
 import { changeClass, gbp, pct, shares as fmtShares } from "@/lib/format";
+import { playSound } from "@/lib/sound";
 import { useGame } from "./GameProvider";
 import { Gauge } from "./DonutChart";
 
@@ -54,6 +55,7 @@ export function ShortPanel({ stock }: { stock: Stock }) {
     setDone(null);
     try {
       await api.openShort({ stockId: stock.id, shares: value, postText: openPost.trim() || undefined });
+      playSound("sell");
       setDone(`Opened a short on ${fmtShares(value)} shares. You received ${gbp(openQuote.proceeds)}.`);
       setShares("");
       setOpenPost("");
@@ -70,6 +72,7 @@ export function ShortPanel({ stock }: { stock: Stock }) {
     setDone(null);
     try {
       const res = await api.closeShort({ shortId, postText: closePost.trim() || undefined });
+      playSound("buy");
       const pnl = res.realisedPnl ?? 0;
       setDone(`Closed short. ${pnl >= 0 ? "Profit" : "Loss"}: ${gbp(Math.abs(pnl))}.`);
       setClosePostFor(null);

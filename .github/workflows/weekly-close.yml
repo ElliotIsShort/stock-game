@@ -4,6 +4,8 @@ on:
   schedule:
     # Sundays 20:00 UTC. The function skips if a close ran recently
     # (config: minHoursBetweenAutoCloses), so an admin manual close is safe.
+    # If you change this, update WEEKLY_CLOSE_SCHEDULE in shared/src/schedule.ts
+    # (it drives the close countdown in the app).
     - cron: "0 20 * * 0"
   workflow_dispatch:
 

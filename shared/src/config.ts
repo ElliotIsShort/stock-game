@@ -19,6 +19,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   maxShortExposurePct: 0.5,
   shortBorrowFeePct: 0.02,
   prizeSplitPct: [0.6, 0.25, 0.15],
+  tickerChangeCooldownHours: 24,
 };
 
 export interface NumberBound {
@@ -68,6 +69,7 @@ export const CONFIG_BOUNDS: ConfigBounds = {
     label: "Weekly prize split (1st, 2nd, 3rd…)",
     help: "Comma-separated, e.g. 0.6, 0.25, 0.15. Rescaled to 100% across however many players qualify.",
   },
+  tickerChangeCooldownHours: { min: 0, max: 8760, label: "Ticker change cooldown (hours)", help: "Minimum hours between a player's ticker changes; 0 disables it" },
 };
 
 function listErrors(key: string, value: unknown, bound: ListBound): string[] {

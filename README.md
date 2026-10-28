@@ -44,8 +44,8 @@ npm run test:unit         # pure game logic, ~1s, no Firebase needed
 npm run test:integration  # starts the emulators, runs the suite, shuts them down
 ```
 
-- **Unit** (`shared/test/`): AMM maths against the design doc's worked example, pool sizing and top-ups, starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule, config validation, photo validation, report markdown.
-- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the cron endpoint's secret, config changes, delisting, stock photos and the full reset.
+- **Unit** (`shared/test/`): AMM maths against the design doc's worked example, pool sizing and top-ups, starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule, config validation, photo validation, report markdown, ticker validation/defaults, close-countdown schedule.
+- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the cron endpoint's secret, config changes, delisting, stock photos, tickers (defaults, uniqueness, cooldown, legacy backfill) and the full reset.
 
 Integration tests always use the `demo-fsm` project on `127.0.0.1`, so they can't touch the live Firebase project. They wipe the emulator before each test.
 
@@ -76,6 +76,9 @@ These fill gaps the design doc left open:
 - **Report flags** have their own config: `flagMovePct` (weekly move), `flagOwnershipPct` (one holder's share of player-held shares, ignoring dust), `flagCollusionMinTrades` (both players trading each other's stock at least N times in a week).
 - **Double-close protection**: the admin button sends the week it's closing, so a double click can't close two weeks; the cron endpoint enforces `minHoursBetweenAutoCloses`.
 - **Full reset** (Admin page, type RESET): deletes all players, stocks, holdings, trades, posts, photos and reports, and restarts at week 1. Keeps sign-in accounts, admins, settings and the audit log. Active players go back to pending so an admin can re-approve them as fresh founders; delisted players are marked declined. It isn't one transaction, so don't run it mid-trading.
+- **Tickers**: everyone gets a default from their name when listed (Joe Bloggs → JOE, then BLO, JBL…) and can pick their own 2–5 letter ticker from their stock page, once per `tickerChangeCooldownHours`. Unique across all stocks, including delisted ones. Stocks listed before tickers existed get the same defaults in listing order, saved the next time anyone lists or changes a ticker.
+- **Close countdown** assumes the cron schedule in `weekly-close.yml` (Sundays 20:00 UTC, mirrored in `shared/src/schedule.ts`) and skips a Sunday the cron would skip after a recent manual close.
+- **Preferences** (theme, sounds) are per device, in localStorage. Sounds are off by default.
 - **Stock photos**: players set their own; admins can only remove someone else's (audit-logged). The server checks type (JPEG/PNG/WebP only, no SVG), magic bytes and size.
 - The design doc's worked example lists "Buy £500 → £64.00 (+28%)". The AMM formula it specifies gives **£63.28 (+26.6%)**; the code follows the formula. The £100 buy (£52.53) and 10-share sell (£39.51) rows match.
 

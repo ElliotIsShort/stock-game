@@ -9,3 +9,4 @@ export { resetGame } from "./reset";
 export { updateContent } from "./content";
 export { renamePlayer } from "./rename";
 export { openShort, closeShort } from "./shorts";
+export { setTicker } from "./ticker";

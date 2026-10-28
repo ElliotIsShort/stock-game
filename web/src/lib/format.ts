@@ -3,6 +3,14 @@ export function gbp(n: number | null | undefined): string {
   return n.toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** "+£2.10" / "−£0.45" / "£0.00", for price and value deltas. */
+export function signedGbp(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  const abs = gbp(Math.abs(n));
+  if (Math.abs(n) < 0.005) return abs;
+  return `${n > 0 ? "+" : "−"}${abs}`;
+}
+
 export function pct(n: number | null | undefined, digits = 1): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";
   const sign = n > 0 ? "+" : "";

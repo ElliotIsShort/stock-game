@@ -10,7 +10,7 @@ import { changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
 type SortKey = "name" | "price" | "change" | "trades";
 
 export default function MarketPage() {
-  const { stocks, playerById, myHoldings, me } = useGame();
+  const { stocks, playerById, myHoldings, me, tickerOf } = useGame();
   const [sort, setSort] = useState<SortKey>("change");
 
   const rows = useMemo(() => {
@@ -64,7 +64,7 @@ export default function MarketPage() {
                   <span className="with-avatar">
                     <Avatar uid={s.id} name={s.displayName} />
                     <span>
-                      <Link href={stockHref(s.id)}>{s.displayName}</Link>
+                      <Link href={stockHref(s.id)}>{s.displayName}</Link> <span className="ticker-chip">${tickerOf(s.id)}</span>
                       {s.id === me?.uid && <span className="muted small"> (you)</span>}
                       {idle && <span className="muted small"> · idle</span>}
                     </span>

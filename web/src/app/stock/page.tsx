@@ -12,6 +12,7 @@ import { TradePanel } from "@/components/TradePanel";
 import { ShortPanel } from "@/components/ShortPanel";
 import { Avatar } from "@/components/Avatar";
 import { PhotoEditor } from "@/components/PhotoEditor";
+import { TickerEditor } from "@/components/TickerEditor";
 import { DonutChart } from "@/components/DonutChart";
 import { api, errorMessage } from "@/lib/api";
 import { fb } from "@/lib/firebase";
@@ -28,7 +29,7 @@ export default function StockPage() {
 
 function StockView() {
   const id = useSearchParams().get("id") ?? "";
-  const { stockById, holdings, playerById, me, isAdmin, photoOf } = useGame();
+  const { stockById, holdings, playerById, me, isAdmin, photoOf, tickerOf } = useGame();
   const stock = stockById.get(id);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
@@ -73,7 +74,7 @@ function StockView() {
           <Avatar uid={stock.id} name={stock.displayName} size={72} />
           <div>
             <h1>
-              {stock.displayName}
+              {stock.displayName} <span className="ticker-chip">${tickerOf(stock.id)}</span>
               {owner?.isIdle && <span className="muted small"> · idle</span>}
               {!stock.listed && <span className="muted small"> · delisted</span>}
             </h1>
@@ -106,8 +107,9 @@ function StockView() {
       {stock.listed && stock.ownerId !== me?.uid && <ShortPanel stock={stock} />}
 
       {stock.id === me?.uid && stock.listed && (
-        <section className="card">
-          <h2>Your photo</h2>
+        <section className="card stack">
+          <h2>Your stock</h2>
+          <TickerEditor stock={stock} />
           <PhotoEditor />
         </section>
       )}

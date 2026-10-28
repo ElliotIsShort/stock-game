@@ -1,5 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import {
+  assignTickers,
+  defaultTicker,
   listingPool,
   listingPrice,
   mean,
@@ -23,6 +25,7 @@ import {
   reqString,
   requireAdmin,
 } from "./common";
+import { backfillTickers } from "./ticker";
 
 /** §4.3 step 1: a signed-in user asks to join. No funds until an admin approves. */
 export const register = onCall(async (req) => {
@@ -95,6 +98,10 @@ export const approvePlayer = onCall(async (req) => {
 
     const pool = listingPool(avgNetWorth, price, cfg.targetTradeSize, cfg.targetImpact);
 
+    // A default ticker from their name; they can change it from their stock page.
+    const tickers = assignTickers(world.stocks);
+    const ticker = defaultTicker(reg.displayName, new Set(tickers.values()));
+
     const player: Player = {
       uid,
       displayName: reg.displayName,
@@ -125,10 +132,12 @@ export const approvePlayer = onCall(async (req) => {
       weekHigh: price,
       weekLow: price,
       weekTradeCount: 0,
+      ticker,
     };
 
     tx.set(refs.player(uid), player);
     tx.set(refs.stock(uid), stock);
+    backfillTickers(tx, world.stocks, tickers);
     tx.update(refs.registration(uid), { status: "approved", decidedAt: now, decidedBy: adminId });
     if (!stateExists) tx.set(refs.state(), state);
 
@@ -139,7 +148,7 @@ export const approvePlayer = onCall(async (req) => {
       authorName: "Market",
       taggedStockId: uid,
       taggedName: reg.displayName,
-      text: `${reg.displayName} has listed at £${price.toFixed(2)}.`,
+      text: `${reg.displayName} has listed as $${ticker} at £${price.toFixed(2)}.`,
       linkedTradeId: null,
       linkedTradeSummary: null,
       reactions: {},

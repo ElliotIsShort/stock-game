@@ -38,6 +38,9 @@ export const api = {
     call<{ uid: string; displayName: string }, { ok: true; from: string; to: string }>("renamePlayer", { uid, displayName }),
   openShort: (req: { stockId: string; shares: number; postText?: string }) => call<typeof req, Short>("openShort", req),
   closeShort: (req: { shortId: string; postText?: string }) => call<typeof req, Short>("closeShort", req),
+  /** Change your own ticker; admins can pass another player's uid. */
+  setTicker: (ticker: string, uid?: string) =>
+    call<{ ticker: string; uid?: string }, { ticker: string; changed: boolean }>("setTicker", uid ? { ticker, uid } : { ticker }),
 };
 
 export function errorMessage(err: unknown): string {

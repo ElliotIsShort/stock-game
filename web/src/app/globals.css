@@ -103,10 +103,13 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
   .tabbar a[aria-current="page"] { color: var(--accent); }
   .tabbar a svg { transition: transform .15s ease-out; }
   .tabbar a:active svg { transform: scale(.9); }
-  .page { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 1.25rem); }
 }
 
-.page { max-width: 1000px; margin: 0 auto; padding: 1.25rem; }
+/* Bottom padding clears the fixed tab bar on phones (--tabbar-h is 0 on wider screens). */
+.page {
+  max-width: 1000px; margin: 0 auto; padding: 1.25rem;
+  padding-bottom: calc(1.25rem + var(--tabbar-h) + env(safe-area-inset-bottom));
+}
 .stack { display: flex; flex-direction: column; gap: 1rem; }
 .row { display: flex; gap: .5rem; align-items: center; }
 .row.between { justify-content: space-between; }
@@ -165,7 +168,9 @@ button.full { width: 100%; }
 .quote dd, .facts dd { margin: 0; text-align: right; }
 
 /* Tables */
-.table-wrap { overflow-x: auto; }
+/* position: relative so absolutely-positioned children (e.g. .sr-only header labels) are clipped
+   by the scroller instead of stretching the whole page sideways on phones. */
+.table-wrap { position: relative; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); }
 thead th { color: var(--muted); font-weight: 500; font-size: .85rem; }

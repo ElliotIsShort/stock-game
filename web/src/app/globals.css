@@ -197,6 +197,15 @@ tr.me-row { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .badge.buy { background: color-mix(in srgb, var(--up) 20%, transparent); color: var(--up); }
 .badge.sell { background: color-mix(in srgb, var(--down) 20%, transparent); color: var(--down); }
 .badge.short { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+/* Forced liquidation (margin call deadline missed): solid red so it can't be mistaken for a normal sell. */
+.badge.forced { background: var(--down); color: var(--on-down); letter-spacing: .03em; }
+.item.trade.forced { border-style: solid; border-color: var(--down); background: color-mix(in srgb, var(--down) 6%, transparent); }
+.margin-banner { background: color-mix(in srgb, var(--down) 18%, var(--panel)); color: var(--text); border: 1px solid var(--down); border-radius: var(--radius); text-align: left; }
+.margin-banner a { font-weight: 600; text-decoration: underline; }
+.margin-card { border-color: var(--down); }
+.raise-cash h3 { margin: 0; }
+.account-item.margin-item { background: color-mix(in srgb, var(--down) 12%, transparent); }
+#margin { scroll-margin-top: 6.5rem; }
 .trade-move { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; }
 .trade-move .delta { font-weight: 600; font-variant-numeric: tabular-nums; }
 .ticker-chip {

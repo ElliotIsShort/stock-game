@@ -15,7 +15,7 @@ export interface User {
 }
 
 export class CallError extends Error {
-  constructor(public status: string, message: string) {
+  constructor(public status: string, message: string, public details?: any) {
     super(`${status}: ${message}`);
   }
 }
@@ -46,8 +46,8 @@ export async function call<T = any>(user: User | null, name: string, data: unkno
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (user) headers.authorization = `Bearer ${user.token}`;
   const r = await fetch(`${FN}/${name}`, { method: "POST", headers, body: JSON.stringify({ data }) });
-  const j = (await r.json()) as { result?: T; error?: { status: string; message: string } };
-  if (j.error) throw new CallError(j.error.status, j.error.message);
+  const j = (await r.json()) as { result?: T; error?: { status: string; message: string; details?: unknown } };
+  if (j.error) throw new CallError(j.error.status, j.error.message, j.error.details);
   return j.result as T;
 }
 

@@ -41,8 +41,11 @@ Everyone in the group is a tradable stock, named after them. You trade each othe
 - Each week the whole prize pool is shared by the top three weekly growers: 60% to first, 25% to second and 15% to third. If fewer than three people qualify, the shares are scaled up so the whole pool still gets paid out.
 - Each week also hands out awards, just for bragging rights: Biggest Mover, Bag Holder, Diamond Hands, Most Reacted Post and Worst Take. They show up as badges on your profile.
 
-## Going bankrupt
-- If you can't afford to buy back a short, your shares are sold to cover it. If that still isn't enough, you're bankrupt: you sit out until the next weekly close. Your stock stays tradable while you're out.
+## Margin calls
+- Your open shorts have a cost to cover: what it would take to buy them all back right now. Once that reaches 80% of your cash you get a warning.
+- If it goes over your cash you're margin called. You get a week to raise the difference, by selling holdings or covering, and the market tells everyone. A price move in your favour can clear it too.
+- Miss the deadline and the market force-sells your holdings, biggest first, only until your shorts are covered, then buys them back. The rest of your portfolio is left alone.
+- If selling everything still isn't enough, you're bankrupt: you sit out until the next weekly close. Your stock stays tradable while you're out.
 
 ## Going quiet
 - If you don't sign in or trade for a few weeks you're marked idle: no allowance or bonus, and you drop off the ranking. Your stock stays tradable. Signing in brings you straight back.

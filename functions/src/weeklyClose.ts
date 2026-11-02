@@ -6,6 +6,9 @@ import {
   computeAwards,
   effectiveClosesAt,
   formatCloseTime,
+  marginStatus,
+  nextMarginFlags,
+  summariseLiquidations,
   positionFromTrades,
   weeklyCloseMessage,
   type Holding,
@@ -42,6 +45,7 @@ import {
 import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWorld, refs } from "./common";
 import { enqueueDiscord } from "./discord";
 import { seriesRef } from "./netWorth";
+import { announceMargin, marginPatch } from "./margin";
 
 export interface CloseOptions {
   /** "admin" = the Admin page button; "schedule" = `closeScheduler` once `closesAt` has passed. */
@@ -261,6 +265,22 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     for (const w of winners) players.get(w.playerId)!.cash += w.prizeAmount;
     const prizePaid = winners.length > 0 ? state.prizePool : 0;
 
+    // ---------- 6b. Margin, after allowances, CEO bonuses, borrow fees and prizes ----------
+    const marginPoolOf = (id: string) => stocks.get(id);
+    const marginUpdates = new Map<string, { patch: Record<string, unknown>; announce: () => void }>();
+    for (const p of players.values()) {
+      const mine = shortsByOwner.get(p.uid) ?? [];
+      if (mine.length === 0 && !p.marginCall && p.marginWarnedAt === undefined) continue;
+      const status = marginStatus(p.cash, mine, marginPoolOf, cfg);
+      const next = nextMarginFlags(p, status, now);
+      if (!next.changed) continue;
+      marginUpdates.set(p.uid, {
+        patch: marginPatch(next.flags),
+        // Week N's posts are dated into week N+1 like the close post itself.
+        announce: () => announceMargin(tx, p, next.event, next.flags, status, week + 1, now),
+      });
+    }
+
     const leaderboard: LeaderboardRow[] = [...players.values()]
       .map((p) => ({
         uid: p.uid,
@@ -309,6 +329,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     const index = (mean([...stocks.values()].map((s) => s.price / s.listPrice)) ?? 1) * 100;
     const linkedTrades = trades.filter((t) => t.linkedPostId).length;
 
+    const liquidations = summariseLiquidations(trades, (uid) => world.players.find((p) => p.uid === uid)?.bankruptAt);
     const flags = computeFlags(cfg, stockStats, [...stocks.values()], world.holdings, trades, allPlayers);
 
     // Weekly awards (also profile badges).
@@ -402,6 +423,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
           .slice(0, 3)
           .map((p) => ({ postId: p.id, authorName: p.authorName, text: p.text, reactionCount: p.reactionCount })),
         awards,
+        ...(liquidations.length ? { liquidations } : {}),
       },
       flags,
       snapshot,
@@ -420,7 +442,9 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
         totalBonus: p.totalBonus,
         // Next week's baseline includes this week's payouts and prize.
         netWorthWeekStart: endWorth,
+        ...(marginUpdates.get(p.uid)?.patch ?? {}),
       });
+      marginUpdates.get(p.uid)?.announce();
       // Append this week's net-worth sample, keeping the most recent N.
       const points = [...(historyOf.get(p.uid) ?? []), { week, t: now, v: endWorth }].slice(-NET_WORTH_HISTORY_MAX);
       tx.set(refs.netWorthHistory(p.uid), { uid: p.uid, points });

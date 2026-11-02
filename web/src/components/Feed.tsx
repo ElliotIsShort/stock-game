@@ -148,13 +148,21 @@ function TradeItem({ trade }: { trade: Trade }) {
   const move = trade.priceAfter / trade.priceBefore - 1;
   const mine = me?.uid === trade.traderId;
   const isShort = trade.kind === "openShort" || trade.kind === "closeShort";
-  const badge = trade.kind === "openShort" ? "SHORT" : trade.kind === "closeShort" ? "COVER" : trade.side === "buy" ? "BUY" : "SELL";
+  const forced = trade.kind === "liquidation" || trade.forced === true;
+  const badge =
+    trade.kind === "liquidation" ? "FORCED SALE" : trade.kind === "openShort" ? "SHORT" : trade.kind === "closeShort" ? (forced ? "FORCED COVER" : "COVER") : trade.side === "buy" ? "BUY" : "SELL";
   const verb =
-    trade.kind === "openShort" ? "opened a short on" : trade.kind === "closeShort" ? "closed a short on" : trade.side === "buy" ? "bought" : "sold";
+    trade.kind === "liquidation"
+      ? "was forced to sell"
+      : trade.kind === "openShort"
+        ? "opened a short on"
+        : trade.kind === "closeShort"
+          ? forced ? "was forced to buy back" : "closed a short on"
+          : trade.side === "buy" ? "bought" : "sold";
   return (
-    <article className="item trade">
+    <article className={`item trade${forced ? " forced" : ""}`}>
       <div className="item-head">
-        <span className={`badge ${isShort ? "short" : trade.side}`}>{badge}</span>
+        <span className={`badge ${forced ? "forced" : isShort ? "short" : trade.side}`}>{badge}</span>
         <span>
           <Link href={profileHref(trade.traderId)} className="strong-link">{trade.traderName}</Link> {verb} {shares(trade.shares)} shares of{" "}
           <Link href={stockHref(trade.stockId)}>{trade.stockName}</Link>{trade.kind === "openShort" ? "" : ` for ${gbp(trade.cashAmount)}`}
@@ -168,7 +176,7 @@ function TradeItem({ trade }: { trade: Trade }) {
           <span aria-hidden="true">{move > 0.00005 ? "▲" : move < -0.00005 ? "▼" : "■"}</span> {signedGbp(trade.priceAfter - trade.priceBefore)} ({pct(move)})
         </span>
       </div>
-      {mine && !trade.linkedPostId && (
+      {mine && !trade.linkedPostId && !forced && (
         annotating ? (
           <PostComposer linkedTradeId={trade.id} onDone={() => setAnnotating(false)} compact />
         ) : (

@@ -10,7 +10,11 @@ import { useGame } from "./GameProvider";
 
 const TOAST_MS = 6000;
 
-/** In-app notifications (price alerts): a bell with an unread count, a list, and a toast when one arrives. */
+function notificationHref(n: AppNotification): string {
+  return n.link ?? (n.stockId ? stockHref(n.stockId) : "/");
+}
+
+/** In-app notifications (price alerts, margin warnings and calls): a bell with an unread count, a list, and a toast when one arrives. */
 export function NotificationBell() {
   const { notifications } = useGame();
   const [open, setOpen] = useState(false);
@@ -83,7 +87,7 @@ export function NotificationBell() {
             {notifications.map((n) => (
               <li key={n.id} className={n.read ? undefined : "unread"}>
                 <Link
-                  href={n.stockId ? stockHref(n.stockId) : "/"}
+                  href={notificationHref(n)}
                   onClick={() => {
                     setOpen(false);
                     if (!n.read) api.markNotificationsRead([n.id]).catch(() => undefined);
@@ -100,7 +104,7 @@ export function NotificationBell() {
       </div>
       {toast && (
         <div className="toast" role="status">
-          <Link href={toast.stockId ? stockHref(toast.stockId) : "/"} onClick={() => setToast(null)}>
+          <Link href={notificationHref(toast)} onClick={() => setToast(null)}>
             <strong>{toast.title}</strong>
             <span className="small">{toast.body}</span>
           </Link>

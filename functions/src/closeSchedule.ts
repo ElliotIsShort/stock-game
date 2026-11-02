@@ -4,6 +4,7 @@ import { logger } from "firebase-functions";
 import { closeTimeError, closeTimeMessage, effectiveClosesAt, formatCloseTime, type Post } from "@fsm/shared";
 import { asObject, auditEntry, auditRef, db, ensureClosesAt, readState, refs, requireAdmin } from "./common";
 import { enqueueDiscord } from "./discord";
+import { liquidateDueMarginCalls, type LiquidationResult } from "./margin";
 import { closeWeek, type CloseResult } from "./weeklyClose";
 
 /**
@@ -54,6 +55,7 @@ export interface SchedulerRun {
   /** The close time the scheduler saw (null when there's no game state yet). */
   closesAt: number | null;
   close: CloseResult | null;
+  liquidations: LiquidationResult[];
 }
 
 /**
@@ -63,7 +65,7 @@ export interface SchedulerRun {
  */
 export async function runScheduler(now: number): Promise<SchedulerRun> {
   const snap = await refs.state().get();
-  if (!snap.exists) return { closesAt: null, close: null };
+  if (!snap.exists) return { closesAt: null, close: null, liquidations: [] };
   const state = snap.data()!;
   const closesAt = typeof state.closesAt === "number" ? state.closesAt : await ensureClosesAt(now);
   let close: CloseResult | null = null;
@@ -71,13 +73,16 @@ export async function runScheduler(now: number): Promise<SchedulerRun> {
     close = await closeWeek({ trigger: "schedule", actorId: null, expectedWeek: state.currentWeek });
     logger.info("Scheduled weekly close", close);
   }
-  return { closesAt, close };
+  // After any close (its allowances may have cleared a call): margin calls past their deadline.
+  const liquidations = await liquidateDueMarginCalls(now);
+  return { closesAt, close, liquidations };
 }
 
 /**
  * Every minute (Cloud Scheduler job #2 of the 3 free per billing account; the
- * other is `discordDigest`). ≈1,440 invocations and ≈1,440 reads a day while
- * nothing is due. No retries: the next tick is a minute away anyway.
+ * other is `discordDigest`). While nothing is due each tick costs 2 reads
+ * (meta/state + an empty margin-deadline query): ≈1,440 invocations and
+ * ≈2,880 reads a day. No retries: the next tick is a minute away anyway.
  */
 export const closeScheduler = onSchedule({ schedule: "every 1 minutes", timeoutSeconds: 300, retryCount: 0 }, async () => {
   try {

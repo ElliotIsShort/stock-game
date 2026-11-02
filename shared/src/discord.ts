@@ -206,6 +206,41 @@ export function bankruptcyMessage(uid: string, name: string, debt: number, short
   };
 }
 
+export function marginWarnMessage(uid: string, coverCost: number, cash: number): DiscordMessage {
+  return {
+    ping: `${mention(uid)}, heads up: your shorts would cost ${money(coverCost)} to cover, against ${money(cash)} cash.`,
+    title: "⚠️ Margin warning",
+    description: "If the cost to cover passes your cash you'll be margin called, with a week to raise the difference.",
+    color: DISCORD_COLOR.warn,
+  };
+}
+
+export function marginCallMessage(uid: string, name: string, shortfall: number, deadline: string): DiscordMessage {
+  return {
+    ping: `${mention(uid)}, you've been margin called: raise ${money(shortfall)} by ${deadline} (UK time).`,
+    title: `🚨 Margin call: ${name}`,
+    description: `Covering their shorts costs more than their cash. Sell holdings or cover the short, or holdings are force-sold at the deadline.`,
+    color: DISCORD_COLOR.down,
+  };
+}
+
+export function marginClearedMessage(uid: string, name: string): DiscordMessage {
+  return {
+    ping: `${mention(uid)}, your margin call is cleared.`,
+    title: `✅ ${name} cleared their margin call`,
+    color: DISCORD_COLOR.up,
+  };
+}
+
+export function liquidationMessage(uid: string, name: string, covered: string[], soldText: string, raised: number, bankrupt: boolean): DiscordMessage {
+  return {
+    ping: `${mention(uid)}, your margin call deadline passed and holdings were force-sold.`,
+    title: `💥 Forced sale: ${name}`,
+    description: `To cover ${covered.length ? `the short on ${covered.join(", ")}` : "their shorts"}: sold ${soldText} for ${money(raised)}.${bankrupt ? " It wasn't enough: bankrupt until the next weekly close." : ""}`,
+    color: DISCORD_COLOR.down,
+  };
+}
+
 export function closeTimeMessage(week: number, when: string, was: string): DiscordMessage {
   return {
     title: `⏱ Week ${week} now closes ${when} (UK time)`,

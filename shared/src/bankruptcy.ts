@@ -2,8 +2,9 @@ import { quoteSell, type Pool } from "./amm";
 import { roundMoney } from "./economy";
 
 /**
- * Bankruptcy settlement (future-facing: debts only exist once shorting/loans
- * are added). A debtor owes `debt`. We first liquidate all their holdings back
+ * Bankruptcy settlement: the last resort of a forced liquidation, when even
+ * selling every holding can't cover a margin-called player's shorts (see
+ * margin.ts; normally only part of the portfolio is sold). A debtor owes `debt`. We first liquidate all their holdings back
  * to the pools at the current price, add that to their cash, then pay creditors.
  *
  * If cash + liquidation covers the debt, it's paid in full and they keep the
@@ -32,6 +33,11 @@ export interface LiquidationSale {
   shares: number;
   /** Net cash raised after the trading fee. */
   cash: number;
+  /** The sale exactly as a normal sell quotes it (the fee goes to the prize pool). */
+  grossCash: number;
+  fee: number;
+  priceBefore: number;
+  priceAfter: number;
 }
 
 export interface CreditorPayout {
@@ -74,7 +80,7 @@ export function settleDebt(
     if (!(h.shares > 0) || !(h.pool.poolCash > 0) || !(h.pool.poolShares > 0)) continue;
     const q = quoteSell(h.pool, h.shares, feePct);
     raised += q.netCash;
-    sales.push({ stockId: h.stockId, shares: h.shares, cash: q.netCash });
+    sales.push({ stockId: h.stockId, shares: h.shares, cash: q.netCash, grossCash: q.grossCash, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter });
   }
   raised = roundMoney(raised);
   const totalOwed = creditors.reduce((a, c) => a + c.owed, 0);

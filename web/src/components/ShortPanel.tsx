@@ -7,6 +7,7 @@ import { changeClass, gbp, pct, shares as fmtShares } from "@/lib/format";
 import { playSound } from "@/lib/sound";
 import { useGame } from "./GameProvider";
 import { Gauge } from "./DonutChart";
+import { RaiseCash } from "./MarginPrompt";
 
 /**
  * Open a short on this stock, and manage any open shorts you hold on it.
@@ -22,6 +23,7 @@ export function ShortPanel({ stock }: { stock: Stock }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [raiseFor, setRaiseFor] = useState<{ shortId: string; shortfall: number } | null>(null);
 
   const mineOnThis = myShorts.filter((s) => s.stockId === stock.id);
   const value = Number(shares);
@@ -70,6 +72,7 @@ export function ShortPanel({ stock }: { stock: Stock }) {
     setBusy(true);
     setError(null);
     setDone(null);
+    setRaiseFor(null);
     try {
       const res = await api.closeShort({ shortId, postText: closePost.trim() || undefined });
       playSound("buy");
@@ -78,11 +81,19 @@ export function ShortPanel({ stock }: { stock: Stock }) {
       setClosePostFor(null);
       setClosePost("");
     } catch (err) {
-      setError(errorMessage(err));
+      // Not enough cash: the server says how much is missing; offer to sell holdings.
+      const details = (err as { details?: { reason?: string; shortfall?: number } }).details;
+      if (details?.reason === "insufficientCash" && typeof details.shortfall === "number") {
+        setRaiseFor({ shortId, shortfall: details.shortfall });
+      } else {
+        setError(errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
   }
+
+  const raiseShort = raiseFor ? mineOnThis.find((s) => s.id === raiseFor.shortId) : undefined;
 
   return (
     <div className="card short-panel">
@@ -157,6 +168,15 @@ export function ShortPanel({ stock }: { stock: Stock }) {
         </label>
         <button type="submit" className="primary" disabled={busy || !openQuote}>Open short</button>
       </form>
+      {raiseShort && raiseFor && (
+        <div className="card margin-card" role="alert">
+          <RaiseCash shorts={[raiseShort]} title={`Raise ${gbp(raiseFor.shortfall)} to cover this short`} />
+          <div className="row">
+            <button type="button" className="primary" disabled={busy} onClick={() => close(raiseShort.id)}>Try covering again</button>
+            <button type="button" disabled={busy} onClick={() => setRaiseFor(null)}>Not now</button>
+          </div>
+        </div>
+      )}
       {error && <p className="error small" role="alert">{error}</p>}
       {done && <p className="success small" role="status">{done}</p>}
     </div>

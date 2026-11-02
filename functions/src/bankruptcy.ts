@@ -1,53 +1,47 @@
 import { FieldValue, type Transaction } from "firebase-admin/firestore";
-import { bankruptcyMessage, priceTick, settleDebt, type Creditor, type Holding, type Player, type Stock } from "@fsm/shared";
+import { bankruptcyMessage, settleDebt, type Creditor, type Holding, type Player } from "@fsm/shared";
 import { auditEntry, auditRef, refs } from "./common";
 import { enqueueDiscord } from "./discord";
+import type { PoolLedger } from "./margin";
 
 /**
- * Settle a player's debt, liquidating their holdings and paying creditors
+ * Settle a player's debt, liquidating ALL their holdings and paying creditors
  * proportionally. If they can't cover it, they're marked bankrupt: deactivated
  * but their stock stays listed so holders can sell. Reactivated at the next
  * weekly close.
  *
- * Internal mechanism only — nothing calls it yet. It's here so the future
- * short-selling / lending features can trigger a settlement. Must run inside a
- * transaction that has already read the debtor, their holdings and the stocks.
+ * Only reached from a forced liquidation (margin.ts) when selling every
+ * holding still can't cover the player's shorts. Must run inside a transaction
+ * that has already read the debtor, their holdings and the stocks. Pool
+ * changes go through `ledger` (the caller flushes it once per stock);
+ * `debtorExtra` is merged into the debtor's single player-doc write.
  *
- * The pure maths lives in @fsm/shared `settleDebt` (unit-tested); this applies
- * the pool, wallet and flag changes.
+ * The pure maths lives in @fsm/shared `settleDebt` (unit-tested).
  */
 export function applyBankruptcySettlement(
   tx: Transaction,
   debtor: Player,
   debtorHoldings: Holding[],
-  stockOf: Map<string, Stock>,
+  ledger: PoolLedger,
   debt: number,
   creditors: Creditor[],
   feePct: number,
   now: number,
   week: number,
+  debtorExtra: Record<string, unknown> = {},
 ): ReturnType<typeof settleDebt> {
   const holdings = debtorHoldings
-    .filter((h) => h.shares > 0 && stockOf.has(h.stockId))
-    .map((h) => {
-      const s = stockOf.get(h.stockId)!;
-      return { stockId: h.stockId, shares: h.shares, pool: { poolCash: s.poolCash, poolShares: s.poolShares } };
-    });
+    .filter((h) => h.shares > 0 && ledger.pool(h.stockId))
+    .map((h) => ({ stockId: h.stockId, shares: h.shares, pool: ledger.pool(h.stockId)! }));
 
   const result = settleDebt(debtor.cash, holdings, debt, creditors, feePct);
 
   // Apply each liquidation sale to its pool and remove the holding.
   for (const sale of result.sales) {
-    const s = stockOf.get(sale.stockId)!;
+    const s = ledger.pool(sale.stockId)!;
     const newShares = s.poolShares + sale.shares;
     const newCash = (s.poolCash * s.poolShares) / newShares;
-    const price = newCash / newShares;
-    // Keep records honest; fire sales don't get their own Discord post.
-    const { allTimeHigh, allTimeLow } = priceTick(s, price, week).patch;
-    tx.update(refs.stock(s.id), {
-      poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, allTimeHigh, allTimeLow,
-      lastTrade: { by: debtor.uid, at: now, week },
-    });
+    ledger.apply(sale.stockId, newCash, newShares, newCash / newShares);
     tx.delete(refs.holding(debtor.uid, sale.stockId));
   }
 
@@ -60,6 +54,7 @@ export function applyBankruptcySettlement(
   tx.update(refs.player(debtor.uid), {
     cash: result.remainingCash,
     ...(result.bankrupt ? { isActive: false, bankruptAt: now } : {}),
+    ...debtorExtra,
   });
 
   if (result.bankrupt) enqueueDiscord(tx, "high", "bankruptcy", bankruptcyMessage(debtor.uid, debtor.displayName, debt, result.shortfall), now);
@@ -70,6 +65,7 @@ export function applyBankruptcySettlement(
       raised: result.raised,
       shortfall: result.shortfall,
       payouts: result.payouts,
+      week,
     }, now),
   );
   return result;

@@ -14,6 +14,7 @@ import {
   type Stock,
 } from "@fsm/shared";
 import { db, refs } from "./common";
+import { reevaluateMargin } from "./margin";
 
 export const seriesRef = (uid: string, week: number) => db.doc(`netWorthSeries/${seriesDocId(uid, week)}`) as DocumentReference<NetWorthSeries>;
 
@@ -97,7 +98,8 @@ export async function recordSeriesPoint(uid: string, week: number, v: number, t:
 /**
  * Runs after every price-moving trade (`stocks/{id}.lastTrade` changed), not
  * on weekly-close bookkeeping or ticker edits. Records a net-worth point for
- * everyone the trade affected.
+ * everyone the trade affected, and re-evaluates margin for those of them with
+ * open shorts (or an existing warning/call).
  *
  * LOOP SAFETY: this must never write to `stocks/*` (it would retrigger
  * itself). It only writes `netWorthSeries/*`.
@@ -125,7 +127,23 @@ export const onStockTraded = onDocumentUpdated({ document: "stocks/{id}", retry:
       }),
     ),
   );
-  const reads = world.reads + results.reduce((a, r) => a + r.reads, 0);
-  const writes = results.reduce((a, r) => a + r.writes, 0);
-  logger.info("onStockTraded", { stockId: after.id, affected: world.players.length, reads, writes });
+  let reads = world.reads + results.reduce((a, r) => a + r.reads, 0);
+  let writes = results.reduce((a, r) => a + r.writes, 0);
+
+  // Margin (§4): re-evaluate affected players with open shorts or margin flags.
+  // Same snapshot, so only 1 extra read (and ≤1 write, on a transition) each.
+  const stockOf = new Map(world.stocks.map((s) => [s.id, s]));
+  const marginUids = world.players
+    .filter((p) => p.marginCall || p.marginWarnedAt !== undefined || world.openShorts.some((s) => s.ownerId === p.uid))
+    .map((p) => p.uid);
+  for (const uid of marginUids) {
+    try {
+      const event = await reevaluateMargin(uid, world.openShorts, stockOf, world.cfg, mark.week);
+      reads += 1;
+      if (event !== null) writes += 1;
+    } catch (err) {
+      logger.error("Margin re-evaluation failed", { uid, err });
+    }
+  }
+  logger.info("onStockTraded", { stockId: after.id, affected: world.players.length, margin: marginUids.length, reads, writes });
 });

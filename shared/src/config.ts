@@ -25,6 +25,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   recapAfterHours: 48,
   maxActiveAlerts: 10,
   netWorthTickMinutes: 5,
+  shortWarnPct: 0.8,
 };
 
 export interface NumberBound {
@@ -80,6 +81,7 @@ export const CONFIG_BOUNDS: ConfigBounds = {
   recapAfterHours: { min: 1, max: 8760, label: "Recap after (hours away)", help: "Show the \"while you were away\" recap after this long without activity" },
   maxActiveAlerts: { min: 0, max: 100, integer: true, label: "Max price alerts per player", help: "How many active price alerts one player can have at once" },
   netWorthTickMinutes: { min: 0, max: 1440, label: "Net-worth chart point interval (minutes)", help: "Changes within this window update the latest chart point instead of adding one; 0 adds a point for every change" },
+  shortWarnPct: { min: 0, max: 1, label: "Margin warning (fraction of cash)", help: "Warn when covering all your shorts would cost this share of your cash; above 100% is a margin call" },
 };
 
 function listErrors(key: string, value: unknown, bound: ListBound): string[] {

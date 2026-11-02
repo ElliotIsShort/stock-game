@@ -17,3 +17,4 @@ export * from "./standings";
 export * from "./recap";
 export * from "./alerts";
 export * from "./netWorthSeries";
+export * from "./margin";

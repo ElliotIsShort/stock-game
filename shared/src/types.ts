@@ -55,6 +55,8 @@ export interface GameConfig {
   maxActiveAlerts: number;
   /** Net-worth chart: changes within this many minutes overwrite the latest point instead of adding one. */
   netWorthTickMinutes: number;
+  /** Margin warning when covering all your shorts would cost at least this fraction of your cash. */
+  shortWarnPct: number;
 }
 
 export interface GameState {
@@ -111,6 +113,20 @@ export interface Player {
   discordId?: string;
   /** Written by `touch` each session. */
   seenSnapshot?: SeenSnapshot;
+  /** Set when their short cover cost first reached `shortWarnPct` of cash (warned once); cleared back at "ok". */
+  marginWarnedAt?: number;
+  /** Present while margin called (shorts cost more to cover than their cash). See shared/margin.ts. */
+  marginCall?: MarginCall;
+}
+
+export interface MarginCall {
+  calledAt: number;
+  /** Forced liquidation after this (calledAt + 7 days). */
+  deadline: number;
+  /** Cash they still need to raise (coverCost − cash, rounded up to the penny); kept current as prices move. */
+  shortfall: number;
+  /** Cost to cover all their open shorts at the last evaluation. */
+  coverCost: number;
 }
 
 export interface Stock {
@@ -224,8 +240,13 @@ export interface Trade {
   week: number;
   createdAt: number;
   linkedPostId?: string | null;
-  /** Present when this trade opened or closed a short, so the feed can label it. */
-  kind?: "openShort" | "closeShort";
+  /**
+   * Present when this trade opened or closed a short, or was a forced sale
+   * after a missed margin-call deadline ("liquidation", shown as FORCED SALE).
+   */
+  kind?: "openShort" | "closeShort" | "liquidation";
+  /** A short buy-back made by forced liquidation, not by the player. */
+  forced?: boolean;
   /**
    * @deprecated No longer written (the feed card's sparkline was removed).
    * Kept optional so trades stored before then still type-check.
@@ -354,10 +375,12 @@ export interface PriceAlert {
 export interface AppNotification {
   id: string;
   uid: string;
-  kind: "alert";
+  kind: "alert" | "margin";
   title: string;
   body: string;
   stockId: string | null;
+  /** Where tapping it goes (app-relative), when it isn't a stock page. */
+  link?: string;
   createdAt: number;
   read: boolean;
 }

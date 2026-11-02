@@ -8,6 +8,7 @@ import {
   badgesFor,
   positionFromTrades,
   reportWinners,
+  touchesHolding,
   type Short,
   type Trade,
   type WeeklyReport,
@@ -65,7 +66,7 @@ export function PlayerProfile({ uid }: { uid: string }) {
   // Best and worst calls: realised + unrealised P/L per stock traded, plus closed shorts.
   const calls = useMemo(() => {
     const byStock = new Map<string, Trade[]>();
-    for (const t of trades.data) if (!t.kind) byStock.set(t.stockId, [...(byStock.get(t.stockId) ?? []), t]);
+    for (const t of trades.data) if (touchesHolding(t)) byStock.set(t.stockId, [...(byStock.get(t.stockId) ?? []), t]);
     const out: Call[] = [];
     for (const [stockId, list] of byStock) {
       const price = stockById.get(stockId)?.price ?? 0;
@@ -178,7 +179,7 @@ export function PlayerProfile({ uid }: { uid: string }) {
             {trades.data.slice(0, 10).map((t) => (
               <li key={t.id} className="row between">
                 <span>
-                  {t.kind === "openShort" ? "Shorted" : t.kind === "closeShort" ? "Covered" : t.side === "buy" ? "Bought" : "Sold"} {shares(t.shares)}{" "}
+                  {t.kind === "openShort" ? "Shorted" : t.kind === "closeShort" ? (t.forced ? "Force-covered" : "Covered") : t.kind === "liquidation" ? "Force-sold" : t.side === "buy" ? "Bought" : "Sold"} {shares(t.shares)}{" "}
                   <Link href={stockHref(t.stockId)}>{t.stockName}</Link>
                 </span>
                 <span className="muted small">{gbp(t.cashAmount)} · {ago(t.createdAt)}</span>

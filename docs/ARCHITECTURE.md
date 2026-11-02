@@ -65,8 +65,9 @@ everywhere so the same types work on server, client and in stored reports.
 | `economy.ts` | Money rules: `startingCash`, `listingPrice`, `netWorth`, `leaderboardScore`, `weeklyGrowth`, `prizeSplit`/`weeklyPrizeWinners`, `ceoBonus`, `isIdleSince`, `roundMoney`, `median`/`mean`, epsilons. |
 | `positions.ts` | `positionFromTrades` — average-cost unrealised P/L for a holding. |
 | `shorts.ts` | Synthetic short quotes: `quoteOpenShort`, `quoteCloseShort`, exposure/capital/borrow-fee helpers. |
-| `bankruptcy.ts` | `settleDebt` — liquidate holdings, pay creditors proportionally, flag bankrupt. |
-| `report.ts` | `WeeklyReport` shape, `mechanicsExplainer`, `reportToMarkdown`, `prizeSplitText`, `reportWinners` (reads pre-split reports' single `winner` too). |
+| `margin.ts` | `marginStatus` (ok/warn/call from cover cost vs cash), `coverCost`, `nextMarginFlags` (warn-once / call / clear state machine), `planLiquidation` (minimal forced sale), `MARGIN_CALL_MS` (7 days), `ceilPenny`. |
+| `bankruptcy.ts` | `settleDebt` — liquidate all holdings, pay creditors proportionally, flag bankrupt (the forced liquidation's last resort). |
+| `report.ts` | `WeeklyReport` shape, `mechanicsExplainer`, `reportToMarkdown` (incl. an optional "Forced liquidations" section), `summariseLiquidations` (groups a week's forced trades), `prizeSplitText`, `reportWinners` (reads pre-split reports' single `winner` too). |
 | `content.ts` | `SiteContent` (rules + changelog), defaults, `MAX_CONTENT_LENGTH`. |
 | `photo.ts` | Avatar validation: `parsePhotoDataUrl`, `PHOTO_SIZE_PX`, `MAX_PHOTO_BYTES`. |
 | `config.ts` | `DEFAULT_CONFIG`, `CONFIG_BOUNDS`, `mergeConfig`, `validateConfigPatch`. |
@@ -157,16 +158,53 @@ followed by a buy.
   weekly at close.
 - Realised P/L = `openProceeds − closeCost − borrowFeesPaid`.
 
-### 3.4 Bankruptcy (`bankruptcy.ts`)
+### 3.4 Margin, forced liquidation and bankruptcy (`margin.ts`, `bankruptcy.ts`)
 
-`settleDebt` liquidates all of a debtor's holdings back into their pools, adds
-that to cash, then settles creditors. If the raised cash covers the debt the
-debtor keeps the change (solvent). Otherwise everything is split among creditors
-proportional to what they are owed, the shortfall is the creditors' loss, and
-the debtor is marked bankrupt (deactivated, but their stock stays listed so
-holders can still sell). Pure — the caller applies pool/wallet effects.
+Debt can only come from open shorts. It's handled as **warn → margin call →
+forced liquidation (last resort)**; nothing is settled behind the player's back.
 
-Currently only reached when a `closeShort` buy-back exceeds the owner's cash.
+`marginStatus(cash, openShorts, poolOf, cfg)`: `coverCost` = cash to buy back
+every open short at today's pools (shorts on one stock are quoted together,
+which on a CPMM equals closing them one after another; a pool too shallow to
+buy back from counts as a call).
+
+| Level | Rule |
+|---|---|
+| `ok` | `coverCost < shortWarnPct × cash` |
+| `warn` | `shortWarnPct × cash ≤ coverCost ≤ cash` |
+| `call` | `coverCost > cash`; `shortfall = coverCost − cash` (rounded up to the penny) |
+
+`nextMarginFlags(prev, status, now)` is the state machine on the player doc:
+ok → warn sets `marginWarnedAt` and warns once (bell + Discord) until back at
+ok; entering `call` sets `marginCall {calledAt, deadline = +7 days, shortfall,
+coverCost}` and announces it (bell, high-priority Discord, feed post "X has
+been margin called…"); while called only `shortfall`/`coverCost` track prices
+(moves under a penny aren't written); back to ok/warn clears it ("X cleared
+their margin call"). Re-evaluated by `onStockTraded` (affected players with
+shorts or flags: after every trade, short open/close and price move on a stock
+they're short), and inside the weekly close after allowances, bonuses, borrow
+fees and prizes.
+
+`closeShort` no longer settles anything: an unaffordable cover fails with
+`failed-precondition` and `details: {reason: "insufficientCash", shortfall,
+cost, cash}`; the UI shows "Raise £Y to cover this short".
+
+`planLiquidation(cash, holdings, shorts, poolOf, feePct)` picks the minimal
+forced sale: holdings largest-value first, only until cash covers `coverCost`
+(the last sale may be partial, solved exactly from the AMM with a penny of
+headroom), same `quoteSell` and fee as a normal sell. The client uses it for
+the "Sell enough to cover" preview too.
+
+`settleDebt` (`bankruptcy.ts`) is the fallback when even selling everything
+can't cover it: it liquidates all holdings, adds that to cash, then settles
+creditors (for shorts there are none; the AMM was the counterparty). If the
+raised cash covers the debt the debtor keeps the change; otherwise it's split
+pro rata among creditors, the shortfall is their loss, and the debtor is
+marked bankrupt (deactivated, stock still listed, reactivated at the next
+close). Each sale reports its gross, fee and prices so the caller can record a
+normal-looking trade. Pure — the caller applies pool/wallet effects.
+
+Now only reached from a forced liquidation (no longer from `closeShort`).
 
 ---
 
@@ -179,16 +217,16 @@ All documents live at the paths below. IDs and relationships:
 | `config/global` | fixed | All of `GameConfig` (see §4.1). Readable by any signed-in user. |
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
 | `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `closesAt` (epoch ms the current week closes; admin-set via `setCloseTime`, advanced by whole weeks after each close at/after it; derived once from the old Sunday 20:00 UTC schedule and persisted by `closeScheduler`/`touch` if absent), `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
-| `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session. |
+| `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session, optional `marginWarnedAt` and `marginCall {calledAt, deadline, shortfall, coverCost}` (§3.4). |
 | `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. `lastTrade {by, at, week}` is written by every trade/short/forced sale (`applyPool`) and is what `onStockTraded` keys on. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
-| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`), optional deprecated `recentPrices` (only on trades from before the feed sparkline was removed; no longer written). |
+| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`/`liquidation` = a forced sale, which counts as a sell for positions), optional `forced` (a short buy-back made by forced liquidation), optional deprecated `recentPrices` (only on trades from before the feed sparkline was removed; no longer written). |
 | `posts/{id}` | auto | `authorId/Name` ("system"/"Market" for system posts), `taggedStockId/Name`, `text`, `linkedTradeId`, `linkedTradeSummary`, `reactions` (type→uid[]), `reactionCount`, `system`, `week`, `createdAt`. |
 | `photos/{uid}` | auth uid | `dataUrl`, `updatedAt`. Separate from the stock doc so price ticks don't resend image bytes. |
 | `devlog/{id}` | auto | `DevlogEntry`: `title`, `body` (same markup as Rules), `date` (noon UTC of the shown day), `createdAt`, `updatedAt`. Readable by anyone signed in; kept by a reset. |
 | `alerts/{id}` | auto | `PriceAlert`: `uid`, `stockId/Name`, `direction` (above/below), `price`, `discord`, `status` (active/triggered/cancelled), `createdAt`, `triggeredAt/Price`. Owner-only reads. |
-| `notifications/{id}` | auto | `AppNotification`: `uid`, `kind` ("alert"), `title`, `body`, `stockId`, `createdAt`, `read`. Owner-only reads. |
+| `notifications/{id}` | auto | `AppNotification`: `uid`, `kind` ("alert" / "margin"), `title`, `body`, `stockId`, optional `link` (e.g. `/portfolio/#margin`), `createdAt`, `read`. Owner-only reads. |
 | `discordOutbox/{id}` | auto | `DiscordOutboxItem`: `priority` (high/normal), `kind`, `message` (`DiscordMessage` with `{@uid}` tokens), `status` (pending → sent/queued/digested/failed/skipped). Server-only. |
 | `discordState/rate` | fixed | `{ windowStart, sent }`: the hourly routine-post counter. Server-only. |
 | `netWorthHistory/{uid}` | auth uid | `points[]` of `{week, t, v}`, one appended per weekly close, capped to 104. Kept as-is for older chart ranges. |
@@ -230,6 +268,7 @@ the next `updateConfig` drops it.
 | `maxPostLength` | 500 | Max post characters. |
 | `postCooldownSeconds` | 10 | Min seconds between a player's standalone posts (0 disables). |
 | `maxShortExposurePct` | 0.5 | Max open-short value as a fraction of capital. |
+| `shortWarnPct` | 0.8 | Margin warning once covering all your shorts costs this fraction of your cash (bounds 0–1); above 100% of cash is a margin call. |
 | `shortBorrowFeePct` | 0.02 | Weekly borrow fee on each open short's value. |
 | `prizeSplitPct` | [0.6, 0.25, 0.15] | Weekly prize split by growth rank; entries used are rescaled to sum to 1. |
 | `tickerChangeCooldownHours` | 24 | Min hours between a player's own ticker changes (admins bypass). 0 disables. |
@@ -264,7 +303,7 @@ helpers.
 | `setTicker` | ticker.ts | player / admin | Change your own ticker (unique across all stocks, `tickerChangeCooldownHours`); admins may change anyone's (no cooldown, audited). Backfills legacy tickers; posts "X now trades as $NEW (was $OLD)". |
 | `rejectPlayer` | approval.ts | admin | Marks a registration rejected. |
 | `trade` | trading.ts | player | Buy (spend cash, fee off the top) or sell (shares). Updates wallet + holding, applies the pool, adds fee to prize pool + week fees, writes the Trade and an optional linked Post. |
-| `openShort` / `closeShort` | shorts.ts | player | Open/close a synthetic short; enforces the exposure cap; fee → prize pool; close can trigger bankruptcy settlement. |
+| `openShort` / `closeShort` | shorts.ts | player | Open/close a synthetic short; enforces the exposure cap; fee → prize pool. An unaffordable close fails with `failed-precondition` + `details.shortfall` (no settlement). |
 | `createPost` / `toggleReaction` / `deletePost` | social.ts | player / player / admin | Standalone/tagged/trade-linked posts (cooldown + length limits), toggle a reaction, admin moderation (keeps text in the audit log). |
 | `touch` | recap.ts | player | Once per page load: records activity, silently reactivates idle players (no back-pay), writes `seenSnapshot` (net worth + rank via `computeStandings`), returns the previous snapshot and, after `recapAfterHours`, a `Recap`. |
 | `discordDeliver` | discord.ts | Firestore trigger | On `discordOutbox` create: skip if disabled/no secret; `high` posts now; `normal` goes through `rateDecision` (hourly bucket in `discordState/rate`) or is `queued`. Resolves `{@uid}` tokens to `<@discordId>` at send time. |
@@ -274,12 +313,12 @@ helpers.
 | `createAlert` / `cancelAlert` | alerts.ts | player | Price alerts (`validateAlert`, capped at `maxActiveAlerts`). |
 | `checkPriceAlerts` | alerts.ts | Firestore trigger | On `stocks/{id}` update with a price change: fires due alerts once each (per-alert transaction), writes a notification, optionally queues a high-priority Discord @mention. |
 | `markNotificationsRead` | alerts.ts | player | Marks some or all of your notifications read. |
-| `onStockTraded` | netWorth.ts | Firestore trigger | On `stocks/{id}` update **only when `lastTrade` changed** (every trade, short open/close and forced sale writes `lastTrade {by, at, week}`; weekly-close bookkeeping and ticker edits don't). Loads the affected players (holders of the stock, players short it, the trader) and what their net worth depends on, then records a series point per player in its own transaction. **Never writes `stocks/*`** (it would retrigger itself). See §5.2 for the read budget. |
+| `onStockTraded` | netWorth.ts | Firestore trigger | On `stocks/{id}` update **only when `lastTrade` changed** (every trade, short open/close and forced sale writes `lastTrade {by, at, week}`; weekly-close bookkeeping and ticker edits don't). Loads the affected players (holders of the stock, players short it, the trader) and what their net worth depends on, records a series point per player in its own transaction, then re-evaluates margin for those with open shorts or margin flags (`reevaluateMargin`, 1 read each, writes only on a transition). **Never writes `stocks/*`** (it would retrigger itself). See §5.2 for the read budget. |
 | `updateConfig` | adminOps.ts | admin | Validates and merges a config patch; audits before/after. |
 | `delistPlayer` | adminOps.ts | admin | Pays every holder out at the last price, unlists the stock, deactivates the account, system post, audit. |
 | `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. Before `closesAt` it leaves `closesAt` unchanged. |
 | `setCloseTime` | closeSchedule.ts | admin | Sets `meta/state.closesAt` (`closeTimeError`: ≥5 min ahead), audits before/after, posts "Week N now closes … UK time (was …)" to the feed and Discord. |
-| `closeScheduler` | closeSchedule.ts | every minute | Reads `meta/state` (1 read); if `now ≥ closesAt` calls `closeWeek` (`trigger: "schedule"`, `expectedWeek` = the week it read) — the transaction re-checks both, so overlapping ticks can't double-close. Persists a legacy-derived `closesAt` if missing. `retryCount: 0`. |
+| `closeScheduler` | closeSchedule.ts | every minute | Reads `meta/state` (1 read); if `now ≥ closesAt` calls `closeWeek` (`trigger: "schedule"`, `expectedWeek` = the week it read) — the transaction re-checks both, so overlapping ticks can't double-close. Persists a legacy-derived `closesAt` if missing. Then `players where marginCall.deadline <= now` (1 read when empty) → `forceLiquidate` each, one transaction per player. `retryCount: 0`. ≈2 reads/minute when idle. |
 | `setStockPhoto` | photo.ts | player / admin | Set/remove your own avatar (validated); admins may only remove others'. |
 | `renamePlayer` | rename.ts | admin | Renames player/stock/registration, then rewrites denormalised names across past trades/posts via a bulkWriter. |
 | `updateContent` | content.ts | admin | Patches the Rules markdown on `content/global` (the legacy `changelog` field is still accepted but no longer edited in the UI). |
@@ -301,6 +340,7 @@ and trades can't interleave. Order (design §6):
 6. **Pool top-up** to target depth at the new average net worth (price unchanged).
 7. **Leaderboard + winners** = `weeklyPrizeWinners`: the top `min(eligible, prizeSplitPct.length)` by `weeklyGrowth` among non-idle players with a positive start-of-week net worth.
 8. **Split the entire prize pool** among the winners by the rescaled `prizeSplitPct`, reset to 0 (rolls over if nobody is eligible). Stored as `highlights.winners[]` (`playerId`, `name`, `growth`, `prizeAmount`); `CloseResult` returns the same `winners` plus `prize` (total paid).
+8b. **Margin** re-evaluated for players with shorts or flags, on the post-payout cash and topped-up pools (calls can clear here; announcements dated into the new week).
 9. **Build and store the WeeklyReport** (money, prices, health, activity, highlights, flags, markdown).
 10. **Writes**: updated players (incl. next week's `netWorthWeekStart`), append a net-worth history point, **reactivate bankrupt players**, reset stock weekly stats, advance `meta/state` to `week + 1` (`prizePool = remaining + borrowFeesCollected`, next `closesAt`), update each short's `borrowFeesPaid`, post a "Week N closed" system message, audit.
 
@@ -313,8 +353,13 @@ holdings, R = other stocks they hold or are short:
 ```
 reads  = 1 (config) + H + S + A + ΣA + R      load (each query costs ≥ 1)
        + A                                    series transactions
-writes ≤ A                                    one series doc each
+       + M                                    margin re-checks (M = affected with shorts/flags)
+writes ≤ A + M                                one series doc each; a player doc only on a margin transition
 ```
+
+Open shorts are found with one `status == open` query over all shorts (a
+handful at friend scale) instead of a `shorts(stockId+status)` index: that one
+query also gives every affected player's liability, so no extra index is needed.
 
 At friend-group scale that's ~25–60 reads per trade in practice (e.g. 15
 players, 3 holdings each, the stock held by 5: 1+5+3+6+18+10+6 ≈ 49). The
@@ -395,7 +440,7 @@ Firestore live and writes only through callable functions.
 | `/` | Feed: prize-pool pill, post composer, global chronological feed. |
 | `/market` | Sortable table of listed stocks (price, week change, trades, your holdings, tickers), median price. |
 | `/stock?id=` | Profile header (avatar, ticker, price, week stats, pool depth, all-time high/low) with two tabs (`&tab=player` selects the second; `profileHref`). **Stock**: price chart, `TradePanel`, `ShortPanel`, `AlertPanel`, "Your stock" (`TickerEditor` + `PhotoEditor`, own only), holders, scoped feed. **Player** (`PlayerProfile`): stats, badges, net worth, best/worst calls, weekly results, recent trades, and `DiscordLink` on your own. |
-| `/portfolio` | Cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, open shorts (live P/L), CEO-bonus summary, recent trades. |
+| `/portfolio` | Margin-call banner, cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, Margin (`#margin`: cover cost vs cash, deadline, "Raise £Y" with "Sell enough to cover" and per-holding sells), open shorts (live P/L), CEO-bonus summary, recent trades. |
 | `/leaderboard` | Ranked by score (idle greyed and unranked), live prize positions + projected "Prize now" share per player. |
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
 | `/rules` | Editable `content/global.rules`, rendered with `SimpleMarkdown`. Reached from the account menu. |
@@ -538,7 +583,8 @@ full configurable-parameter set (§9).
 | Feature | Where | Notes |
 |---|---|---|
 | **Short selling** | `shared/shorts.ts`, `functions/shorts.ts`, `ShortPanel` | Synthetic shorts against the AMM, capped at `maxShortExposurePct` of capital, weekly `shortBorrowFeePct` into the prize pool. Labelled SHORT/COVER in the feed. |
-| **Bankruptcy settlement** | `shared/bankruptcy.ts`, `functions/bankruptcy.ts` | Liquidate holdings → pay creditors pro-rata → deactivate if short. Currently only reachable from an unaffordable `closeShort`. Bankrupt players reactivate at the next close. |
+| **Margin calls + forced liquidation** | `shared/margin.ts`, `functions/margin.ts`, `MarginPrompt` (banner, "Raise £Y" prompt), Portfolio → Margin, account menu | Warn at `shortWarnPct` of cash (once), margin call above cash with a 7-day deadline (bell, Discord high, feed post, banner), resolved by selling/covering or by prices moving. After the deadline `closeScheduler` force-sells the minimum (largest holding first) and covers the shorts: FORCED SALE trades, feed post, notification, Discord, audit and a "Forced liquidations" report section. |
+| **Bankruptcy settlement** | `shared/bankruptcy.ts`, `functions/bankruptcy.ts` | Liquidate all holdings → pay creditors pro-rata → deactivate if short. Only the last resort of a forced liquidation, when selling everything can't cover the shorts (no longer reached from `closeShort`). Bankrupt players reactivate at the next close. |
 | **Stock photos / avatars** | `shared/photo.ts`, `functions/photo.ts`, `PhotoEditor` | 256px data-URL avatars with server-side magic-byte validation, stored in `photos/{uid}` so price ticks don't resend bytes. |
 | **Admin rename** | `functions/rename.ts` | Renames a player and rewrites denormalised names across all past trades/posts. |
 | **Full reset** | `functions/reset.ts` | Wipe-to-day-one preserving accounts/admins/config/audit; re-queues players as pending. |
@@ -553,7 +599,7 @@ full configurable-parameter set (§9).
 | **Close countdown + ticker tape** | `shared/schedule.ts`, `MarketStrip` | On every page under the top bar. |
 | **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |
 | **Mobile tab bar + installable PWA** | `Shell`, `app/manifest.ts`, `public/sw.js` | Bottom tabs on phones; Add to Home Screen. |
-| **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼ (the per-trade sparkline was removed); names link to profiles; reactions bounce and their counts roll when they change live. |
+| **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼ (the per-trade sparkline was removed); forced trades get a solid-red FORCED SALE / FORCED COVER badge and card; names link to profiles; reactions bounce and their counts roll when they change live. |
 | **Discord webhook** | `shared/discord.ts`, `functions/discord.ts`, `marketEvents.ts`, `DiscordLink`, Admin → Discord | Outbox + Firestore trigger, hourly rate limit + digest, @mentions for linked players. Webhook URL only in the `DISCORD_WEBHOOK_URL` secret. Slash commands are a possible next step (HTTP interactions endpoint). |
 | **Weekly awards + badges** | `shared/awards.ts`, `weeklyClose.ts` | Stored on `report.highlights.awards`; shown in the report, results screen, close post and as profile badges. |
 | **Recap** | `functions/recap.ts`, `RecapCard` | "While you were away" after `recapAfterHours`. |

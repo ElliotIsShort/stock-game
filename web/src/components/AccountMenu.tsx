@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { formatCloseTime } from "@fsm/shared";
 import { gbp, profileHref, stockHref } from "@/lib/format";
 import { setPrefs, usePrefs, type ThemePref } from "@/lib/prefs";
 import { devlogSeenAt, isNewSince, useDevlog } from "@/lib/devlog";
@@ -162,6 +163,12 @@ export function AccountMenu() {
         )}
 
         <div className="account-sep" role="separator" />
+        {me?.marginCall && (
+          <Link href="/portfolio/#margin" role="menuitem" className="account-item danger margin-item" onClick={() => setOpen(false)}>
+            <span>🚨 Margin call: raise {gbp(me.marginCall.shortfall)}</span>
+            <span className="small">By {formatCloseTime(me.marginCall.deadline)} (UK time), or holdings are force-sold</span>
+          </Link>
+        )}
         {me && (
           <>
             <MenuLink href={profileHref(me.uid)} onSelect={() => setOpen(false)} hint="Badges, history and Discord">

@@ -51,6 +51,48 @@ export interface GrowthRow {
   weeklyGrowth: number;
 }
 
+export interface LiquidationSummary {
+  playerId: string;
+  name: string;
+  at: number;
+  /** Holdings force-sold, largest first. */
+  sold: { stockName: string; shares: number; cash: number }[];
+  /** Net cash the sales raised. */
+  raised: number;
+  /** Stocks whose shorts were bought back. */
+  covered: string[];
+  /** Selling everything wasn't enough: settled as a bankruptcy. */
+  bankrupt: boolean;
+}
+
+/** Group a week's forced-sale and forced-cover trades into one summary per liquidation (same player, same instant). */
+export function summariseLiquidations(
+  trades: { traderId: string; traderName: string; stockName: string; kind?: string; forced?: boolean; shares: number; netCash: number; createdAt: number }[],
+  bankruptAt: (playerId: string) => number | undefined,
+): LiquidationSummary[] {
+  const byKey = new Map<string, LiquidationSummary>();
+  for (const t of trades) {
+    const isSale = t.kind === "liquidation";
+    const isCover = t.kind === "closeShort" && t.forced === true;
+    if (!isSale && !isCover) continue;
+    const key = `${t.traderId}@${t.createdAt}`;
+    const row = byKey.get(key) ?? { playerId: t.traderId, name: t.traderName, at: t.createdAt, sold: [], raised: 0, covered: [], bankrupt: bankruptAt(t.traderId) === t.createdAt };
+    if (isSale) {
+      row.sold.push({ stockName: t.stockName, shares: t.shares, cash: t.netCash });
+      row.raised += t.netCash;
+    } else if (!row.covered.includes(t.stockName)) {
+      row.covered.push(t.stockName);
+    }
+    byKey.set(key, row);
+  }
+  return [...byKey.values()].map((r) => ({ ...r, sold: r.sold.sort((a, b) => b.cash - a.cash) })).sort((a, b) => a.at - b.at);
+}
+
+/** "sold Bob (£120.00), Cara (£30.00)" style list for posts and reports. */
+export function liquidationSoldText(sold: { stockName: string; cash: number }[]): string {
+  return sold.length ? sold.map((s) => `${s.stockName} (${gbp(s.cash)})`).join(", ") : "nothing";
+}
+
 export interface ReportFlag {
   type: "bigMove" | "concentration" | "collusion";
   message: string;
@@ -113,6 +155,8 @@ export interface WeeklyReport {
     topPosts: { postId: string; authorName: string; text: string; reactionCount: number }[];
     /** Weekly awards. Absent on reports from before awards existed. */
     awards?: Award[];
+    /** Forced liquidations after missed margin calls. Absent on older reports. */
+    liquidations?: LiquidationSummary[];
   };
   flags: ReportFlag[];
   /** Balances snapshotted before any weekly payouts. */
@@ -259,6 +303,14 @@ export function reportToMarkdown(r: Omit<WeeklyReport, "markdown">): string {
   if (hl.topPosts.length) {
     lines.push("- Most-reacted posts:");
     for (const p of hl.topPosts) lines.push(`  - ${p.authorName} (${p.reactionCount} reactions): "${p.text.replace(/\s+/g, " ").slice(0, 200)}"`);
+  }
+  if (hl.liquidations?.length) {
+    lines.push("");
+    lines.push("## Forced liquidations");
+    for (const l of hl.liquidations) {
+      const covered = l.covered.length ? ` to cover short${l.covered.length === 1 ? "" : "s"} on ${l.covered.join(", ")}` : "";
+      lines.push(`- **${l.name}** was force-liquidated${covered}: sold ${liquidationSoldText(l.sold)} for ${gbp(l.raised)}${l.bankrupt ? " and went bankrupt" : ""}`);
+    }
   }
   lines.push("");
   lines.push("## Flags");

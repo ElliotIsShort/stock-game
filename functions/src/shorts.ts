@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import type { Transaction } from "firebase-admin/firestore";
 import {
+  ceilPenny,
   priceTick,
   quoteCloseShort,
   quoteOpenShort,
@@ -12,7 +13,6 @@ import {
   type Short,
   type Stock,
 } from "@fsm/shared";
-import { applyBankruptcySettlement } from "./bankruptcy";
 import { asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
 import { announceTrade } from "./marketEvents";
 import { applyPool } from "./trading";
@@ -101,9 +101,10 @@ export const openShort = onCall(async (req) => {
 });
 
 /**
- * Close an open short: buy the shares back from the pool. If the buy-back costs
- * more than you can pay, the bankruptcy mechanism settles it. Players may close
- * at any time, in profit or at a loss.
+ * Close an open short: buy the shares back from the pool. Players may close at
+ * any time, in profit or at a loss, as long as they have the cash: if not, it
+ * fails with `failed-precondition` and `details.shortfall` (the UI offers to
+ * sell holdings first). Nothing is settled automatically here any more.
  */
 export const closeShort = onCall(async (req) => {
   const uid = requireAuth(req);
@@ -128,7 +129,23 @@ export const closeShort = onCall(async (req) => {
     const stock = stockSnap.data() as Stock;
     if (postText && postText.length > cfg.maxPostLength) throw new HttpsError("invalid-argument", `Post must be at most ${cfg.maxPostLength} characters.`);
 
-    const q = quoteCloseShort(stock, short.shares, cfg.tradingFeePct);
+    let q: ReturnType<typeof quoteCloseShort>;
+    try {
+      q = quoteCloseShort(stock, short.shares, cfg.tradingFeePct);
+    } catch {
+      throw new HttpsError("failed-precondition", "The pool is too shallow to buy these shares back right now.", { reason: "uncoverable" });
+    }
+    // Unaffordable: refuse, with the shortfall, so the player can sell holdings first.
+    // (A margin call, and forced liquidation after its deadline, handle it if they don't.)
+    if (q.cost > player.cash + 1e-6) {
+      const shortfall = ceilPenny(q.cost - player.cash);
+      throw new HttpsError("failed-precondition", `You need £${shortfall.toFixed(2)} more cash to buy this short back. Sell some holdings first.`, {
+        reason: "insufficientCash",
+        shortfall,
+        cost: q.cost,
+        cash: player.cash,
+      });
+    }
     const realisedPnl = short.openProceeds - q.cost - short.borrowFeesPaid;
 
     const tick = priceTick(stock, q.priceAfter, state.currentWeek);
@@ -147,19 +164,7 @@ export const closeShort = onCall(async (req) => {
     });
     recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText });
     announceTrade(tx, { kind: "closeShort", traderName: player.displayName, stock, cash: q.cost, shares: short.shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
-
-    if (q.cost > player.cash + 1e-6) {
-      // Can't afford the buy-back: liquidate holdings and, if still short, go bankrupt.
-      const holdingsSnap = await db.collection("holdings").where("uid", "==", uid).get();
-      const debtorHoldings = holdingsSnap.docs.map((d) => d.data() as Holding);
-      const stocksSnap = await db.collection("stocks").get();
-      const stockOf = new Map(stocksSnap.docs.map((d) => [d.id, d.data() as Stock]));
-      // The pool change from this close is already staged above; reflect it for liquidation pricing.
-      stockOf.set(stock.id, { ...stock, ...tick.patch, poolCash: q.newPoolCash, poolShares: q.newPoolShares, price: q.priceAfter });
-      applyBankruptcySettlement(tx, player, debtorHoldings, stockOf, q.cost, [], cfg.tradingFeePct, now, state.currentWeek);
-    } else {
-      tx.update(refs.player(uid), { cash: player.cash - q.cost, lastActiveAt: now, isIdle: false });
-    }
+    tx.update(refs.player(uid), { cash: player.cash - q.cost, lastActiveAt: now, isIdle: false });
     return { ...short, status: "closed", closePrice: q.priceAfter, closeCost: q.cost, realisedPnl, closedAt: now };
   });
 });

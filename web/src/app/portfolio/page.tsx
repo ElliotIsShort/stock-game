@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
-import { positionFromTrades, quoteCloseShort, shortUnrealised, type Trade } from "@fsm/shared";
+import { formatCloseTime, positionFromTrades, quoteCloseShort, shortUnrealised, touchesHolding, type Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { AlertList } from "@/components/AlertPanel";
@@ -14,6 +14,7 @@ import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
 import { useNetWorthPoints } from "@/lib/netWorth";
+import { MarginCallBanner, RaiseCash, useMyMargin } from "@/components/MarginPrompt";
 
 export default function PortfolioPage() {
   const { me, playerById, myHoldings, myShorts, myAlerts, stockById, holdings, config } = useGame();
@@ -25,13 +26,14 @@ export default function PortfolioPage() {
   );
   // Weekly close history + the per-change series of recent weeks + the live value.
   const nwPoints = useNetWorthPoints(uid, uid ? playerById.get(uid)?.netWorth : undefined);
+  const margin = useMyMargin();
 
   // Group my trades by stock for per-holding cost basis.
   const tradesByStock = useMemo(() => {
     const map = new Map<string, Trade[]>();
     for (const t of myTrades.data) {
-      // Short opens/covers are trades too, but they don't change what you hold.
-      if (t.kind) continue;
+      // Short opens/covers are trades too, but they don't change what you hold (forced sales do).
+      if (!touchesHolding(t)) continue;
       const list = map.get(t.stockId) ?? [];
       list.push(t);
       map.set(t.stockId, list);
@@ -60,6 +62,7 @@ export default function PortfolioPage() {
   return (
     <div className="stack">
       <h1>Portfolio</h1>
+      <MarginCallBanner />
       {me.isIdle && <div className="banner">You&apos;re marked idle — you&apos;ll reactivate automatically now you&apos;re back.</div>}
       <div className="stats">
         <StatCard label="Cash" value={me.cash} />
@@ -127,6 +130,14 @@ export default function PortfolioPage() {
           </div>
         )}
       </section>
+
+      {(myShorts.length > 0 || me.marginCall) && (
+        <section className={`card${me.marginCall ? " margin-card" : ""}`} id="margin">
+          <h2>Margin</h2>
+          <MarginSummary />
+          {(me.marginCall || margin?.level === "call") && <RaiseCash shorts={myShorts} />}
+        </section>
+      )}
 
       {myShorts.length > 0 && (
         <section className="card">
@@ -201,7 +212,7 @@ export default function PortfolioPage() {
             {myTrades.data.slice(0, 50).map((t) => (
               <li key={t.id} className="row between">
                 <span>
-                  {t.side === "buy" ? "Bought" : "Sold"} {shares(t.shares)} <Link href={stockHref(t.stockId)}>{t.stockName}</Link>
+                  {t.kind === "liquidation" ? "Force-sold" : t.forced ? "Force-covered" : t.side === "buy" ? "Bought" : "Sold"} {shares(t.shares)} <Link href={stockHref(t.stockId)}>{t.stockName}</Link>
                 </span>
                 <span className="muted small">
                   {gbp(Math.abs(t.netCash))} · fee {gbp(t.fee)} · {ago(t.createdAt)}
@@ -211,6 +222,33 @@ export default function PortfolioPage() {
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+/** Where your shorts stand: cost to cover vs cash, the warning line and any call. */
+function MarginSummary() {
+  const { me, config } = useGame();
+  const live = useMyMargin();
+  if (!me || !live) return null;
+  const ratio = live.cash > 0 ? live.coverCost / live.cash : Number.POSITIVE_INFINITY;
+  return (
+    <div className="stack">
+      <p className="small">
+        Covering all your shorts now costs <strong>{gbp(live.coverCost)}</strong> against <strong>{gbp(live.cash)}</strong> cash
+        {Number.isFinite(ratio) ? ` (${Math.round(ratio * 100)}%)` : ""}.{" "}
+        {live.level === "ok" && <span className="up">You&apos;re fine.</span>}
+        {live.level === "warn" && (
+          <span className="flag">That&apos;s past the {Math.round(config.shortWarnPct * 100)}% warning line: above 100% you&apos;ll be margin called.</span>
+        )}
+        {live.level === "call" && <span className="down">That&apos;s more than your cash: you&apos;re short {gbp(live.shortfall)}.</span>}
+      </p>
+      {me.marginCall && (
+        <p className="small">
+          Margin called {ago(me.marginCall.calledAt)}. If it isn&apos;t covered by <strong>{formatCloseTime(me.marginCall.deadline)}</strong> (UK time),
+          holdings are force-sold, largest first, until the shorts are covered. The rest of your portfolio is left alone.
+        </p>
+      )}
     </div>
   );
 }

@@ -30,12 +30,18 @@ export interface Position {
   holdingSince: number | null;
 }
 
+/** Whether a trade changed the trader's holding: plain buys/sells and forced sales, not short opens/covers. */
+export function touchesHolding(t: Pick<Trade, "kind">): boolean {
+  return t.kind === undefined || t.kind === "liquidation";
+}
+
 /**
  * Short opens/closes are recorded as trades too (`kind`), but they don't
- * touch your holdings, so they're ignored here.
+ * touch your holdings, so they're ignored here. Forced sales (`liquidation`)
+ * are sells like any other.
  */
 export function positionFromTrades(trades: Pick<Trade, "side" | "shares" | "netCash" | "createdAt" | "kind">[], currentPrice: number): Position {
-  const ordered = trades.filter((t) => !t.kind).sort((a, b) => a.createdAt - b.createdAt);
+  const ordered = trades.filter(touchesHolding).sort((a, b) => a.createdAt - b.createdAt);
   let shares = 0;
   let cost = 0;
   let realised = 0;

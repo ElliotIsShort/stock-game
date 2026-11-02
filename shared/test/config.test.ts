@@ -25,6 +25,13 @@ describe("config", () => {
     expect(mergeConfig(null)).toEqual(DEFAULT_CONFIG);
   });
 
+  it("tolerates retired keys in a stored config doc", () => {
+    const merged = mergeConfig({ minHoursBetweenAutoCloses: 144, weeklyAllowance: 250 } as never);
+    expect(merged).not.toHaveProperty("minHoursBetweenAutoCloses");
+    expect(merged.weeklyAllowance).toBe(250);
+    expect(validateConfigPatch({ minHoursBetweenAutoCloses: 144 })).toEqual(["Unknown setting: minHoursBetweenAutoCloses"]);
+  });
+
   it("defaults the prize split to 60/25/15", () => {
     expect(DEFAULT_CONFIG.prizeSplitPct).toEqual([0.6, 0.25, 0.15]);
   });

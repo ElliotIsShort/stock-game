@@ -3,8 +3,6 @@
  * Everything here talks to 127.0.0.1 with the demo-fsm project, so it can
  * never touch the real Firebase project.
  */
-import { readFileSync } from "node:fs";
-
 export const PROJECT = "demo-fsm";
 const FN = `http://127.0.0.1:5001/${PROJECT}/europe-west2`;
 const FS_ROOT = `http://127.0.0.1:8180/v1/projects/${PROJECT}/databases/(default)/documents`;
@@ -64,17 +62,15 @@ export async function expectCallError(p: Promise<unknown>, status: string): Prom
   throw new Error(`Expected ${status}, but the call succeeded`);
 }
 
-export function cronSecret(): string {
-  const file = readFileSync(new URL("../.secret.local", import.meta.url), "utf8");
-  const m = /^CRON_SECRET=(.+)$/m.exec(file);
-  if (!m) throw new Error("functions/.secret.local has no CRON_SECRET");
-  return m[1].trim();
-}
-
-export function cron(secret: string | null, method = "POST") {
-  const headers: Record<string, string> = {};
-  if (secret !== null) headers.authorization = `Bearer ${secret}`;
-  return fetch(`${FN}/weeklyCloseCron`, { method, headers });
+/**
+ * Run one tick of the per-minute `closeScheduler`. The emulator doesn't fire
+ * scheduled functions on its own (no Cloud Scheduler), but a v2 scheduled
+ * function is an HTTP handler, so the emulator's function route invokes it.
+ */
+export async function tickScheduler(): Promise<void> {
+  // The emulator keys non-HTTPS triggers as "<name>-0".
+  const r = await fetch(`${FN}/closeScheduler-0`, { method: "POST" });
+  if (!r.ok) throw new Error(`closeScheduler tick failed: ${r.status} ${await r.text()}`);
 }
 
 // ---------- Firestore REST (admin access bypasses rules with "Bearer owner") ----------
@@ -125,6 +121,17 @@ export async function patchDoc(path: string, fields: Record<string, Json>): Prom
     body: JSON.stringify({ fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, toValue(v)])) }),
   });
   if (!r.ok) throw new Error(`patch ${path} failed: ${r.status} ${await r.text()}`);
+}
+
+/** Remove fields from a doc (e.g. to simulate state from before a field existed), bypassing security rules. */
+export async function clearFields(path: string, keys: string[]): Promise<void> {
+  const mask = keys.map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");
+  const r = await fetch(`${FS_ROOT}/${path}?${mask}&currentDocument.exists=true`, {
+    method: "PATCH",
+    headers: { ...OWNER, "content-type": "application/json" },
+    body: JSON.stringify({ fields: {} }),
+  });
+  if (!r.ok) throw new Error(`clear ${path} failed: ${r.status} ${await r.text()}`);
 }
 
 /** Read a doc as a client would (security rules apply). Returns the HTTP status. */

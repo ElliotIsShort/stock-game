@@ -38,6 +38,9 @@ export const api = {
       "runWeeklyClose",
       { expectedWeek },
     ),
+  /** Set the exact instant (epoch ms) the current week closes. */
+  setCloseTime: (closesAt: number) =>
+    call<{ closesAt: number }, { week: number; closesAt: number; previous: number }>("setCloseTime", { closesAt }),
   resetGame: (confirm: string) =>
     call<{ confirm: string }, { deleted: Record<string, number>; requeued: number; declined: number }>("resetGame", { confirm }),
   updateContent: (patch: { rules?: string; changelog?: string }) => call<typeof patch, { ok: true }>("updateContent", patch),

@@ -16,7 +16,7 @@ import {
   type Trade,
   type WeeklyReport,
 } from "@fsm/shared";
-import { db, refs, requireAuth } from "./common";
+import { db, ensureClosesAt, refs, requireAuth } from "./common";
 
 const HOUR_MS = 3_600_000;
 
@@ -55,6 +55,9 @@ export const touch = onCall(async (req): Promise<TouchResult> => {
   const week = state?.currentWeek ?? 1;
   const previous = me.seenSnapshot ?? null;
   const snapshot: SeenSnapshot = { at: now, netWorth: mine.netWorth, rank: mine.rank, week };
+
+  // Migration for state from before closesAt (the client shows the same derived value meanwhile).
+  if (state && typeof state.closesAt !== "number") await ensureClosesAt(now);
 
   const since = me.lastActiveAt;
   const recap = now - since >= cfg.recapAfterHours * HOUR_MS ? await buildRecap(uid, since, previous, mine, week, stocks) : null;

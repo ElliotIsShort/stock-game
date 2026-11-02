@@ -62,7 +62,8 @@ export interface WeeklyReport {
   periodStart: number;
   periodEnd: number;
   generatedAt: number;
-  trigger: "admin" | "cron";
+  /** "schedule" = the per-minute close scheduler; "cron" only appears on reports from the old GitHub Actions cron. */
+  trigger: "admin" | "schedule" | "cron";
   settings: GameConfig;
   explainer: string;
   money: {

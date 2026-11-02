@@ -1,8 +1,11 @@
 import { HttpsError } from "firebase-functions/v2/https";
 import { FieldValue } from "firebase-admin/firestore";
 import {
+  advanceClosesAt,
   assignTickers,
   computeAwards,
+  effectiveClosesAt,
+  formatCloseTime,
   positionFromTrades,
   weeklyCloseMessage,
   type Holding,
@@ -40,9 +43,14 @@ import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWor
 import { enqueueDiscord } from "./discord";
 
 export interface CloseOptions {
-  trigger: "admin" | "cron";
+  /** "admin" = the Admin page button; "schedule" = `closeScheduler` once `closesAt` has passed. */
+  trigger: "admin" | "schedule";
   actorId: string | null;
-  /** Admin closes pass the week they saw, so a double-click can't close two weeks. */
+  /**
+   * The week the caller saw, so a double-click or two overlapping scheduler
+   * runs can't close two weeks. Admin: a mismatch is an error. Scheduler: a
+   * mismatch (someone else just closed it) is a quiet skip.
+   */
   expectedWeek?: number;
 }
 
@@ -65,16 +73,19 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     const cfg = await readConfig(tx);
     const { state } = await readState(tx, now);
     const week = state.currentWeek;
+    const closesAt = effectiveClosesAt(state, now);
 
     if (opts.expectedWeek !== undefined && opts.expectedWeek !== week) {
+      if (opts.trigger === "schedule") return { closed: false, reason: `Week ${opts.expectedWeek} was already closed.` };
       throw new HttpsError("failed-precondition", `Week ${opts.expectedWeek} is already closed (current week is ${week}).`);
     }
-    if (opts.trigger === "cron" && state.lastCloseAt !== null) {
-      const hours = (now - state.lastCloseAt) / 3_600_000;
-      if (hours < cfg.minHoursBetweenAutoCloses) {
-        return { closed: false, reason: `Last close was ${hours.toFixed(1)}h ago (min ${cfg.minHoursBetweenAutoCloses}h).` };
-      }
+    // Re-checked inside the transaction: an admin may have moved the close later since the scheduler looked.
+    if (opts.trigger === "schedule" && now < closesAt) {
+      return { closed: false, reason: `Not due until ${new Date(closesAt).toISOString()}.` };
     }
+    // A close at or after the due time moves the next one on by whole weeks;
+    // an early manual close leaves it where it is (the admin can edit it).
+    const nextClosesAt = now >= closesAt ? advanceClosesAt(closesAt, now) : closesAt;
 
     const world = await readWorld(tx);
     const [tradesSnap, postsSnap, prevSnap, openShortsSnap] = await Promise.all([
@@ -445,6 +456,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       weekFees: 0,
       weekStartedAt: now,
       lastCloseAt: now,
+      closesAt: nextClosesAt,
       avgNetWorth,
     });
     for (const w of borrowFeeWrites) tx.update(refs.short(w.shortId), { borrowFeesPaid: w.total });
@@ -466,7 +478,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       authorName: "Market",
       taggedStockId: null,
       taggedName: null,
-      text: `Week ${week} closed. ${winnerText}`,
+      text: `Week ${week} closed. ${winnerText} Week ${week + 1} closes ${formatCloseTime(nextClosesAt)}.`,
       linkedTradeId: null,
       linkedTradeSummary: null,
       reactions: {},
@@ -486,9 +498,10 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     }), now);
     tx.set(
       auditRef(),
-      auditEntry(opts.actorId ?? "cron", "weeklyClose", reportRef.id, {
+      auditEntry(opts.actorId ?? "scheduler", "weeklyClose", reportRef.id, {
         week,
         trigger: opts.trigger,
+        closesAt: { from: closesAt, to: nextClosesAt },
         prizePaid,
         winners: winners.map((w) => ({ playerId: w.playerId, prizeAmount: w.prizeAmount })),
       }, now),

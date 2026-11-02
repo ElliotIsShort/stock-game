@@ -27,8 +27,6 @@ export interface GameConfig {
   flagOwnershipPct: number;
   /** Report flag: min trades each way between two players to flag possible collusion. */
   flagCollusionMinTrades: number;
-  /** Automated (cron) weekly close is skipped if the last close was more recent than this. */
-  minHoursBetweenAutoCloses: number;
   /** Max post length in characters. */
   maxPostLength: number;
   /** Minimum seconds between a player's standalone posts. 0 disables the cooldown. */
@@ -66,6 +64,13 @@ export interface GameState {
   weekFees: number;
   weekStartedAt: number;
   lastCloseAt: number | null;
+  /**
+   * Epoch ms the current week closes. Set by an admin (`setCloseTime`) and
+   * moved on by whole weeks after each scheduled close. Absent on state from
+   * before it existed: read it via `effectiveClosesAt` (the scheduler and
+   * `touch` persist the derived value).
+   */
+  closesAt?: number;
   /** Average net worth of active players at the last close or listing (Discord "big trade" threshold). */
   avgNetWorth?: number;
 }

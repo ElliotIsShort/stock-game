@@ -13,7 +13,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   flagMovePct: 0.5,
   flagOwnershipPct: 0.5,
   flagCollusionMinTrades: 3,
-  minHoursBetweenAutoCloses: 144,
   maxPostLength: 500,
   postCooldownSeconds: 10,
   maxShortExposurePct: 0.5,
@@ -62,7 +61,6 @@ export const CONFIG_BOUNDS: ConfigBounds = {
   flagMovePct: { min: 0, max: 100, label: "Flag: weekly move (fraction)", help: "Report flags stocks moving more than this" },
   flagOwnershipPct: { min: 0, max: 1, label: "Flag: ownership (fraction)", help: "Report flags one player owning more than this share of a stock" },
   flagCollusionMinTrades: { min: 1, max: 1000, integer: true, label: "Flag: back-and-forth trades", help: "Min trades each way between two players to flag" },
-  minHoursBetweenAutoCloses: { min: 0, max: 1000, label: "Min hours between automatic closes", help: "Cron-triggered closes are skipped inside this window" },
   maxPostLength: { min: 10, max: 5000, integer: true, label: "Max post length", help: "Characters" },
   postCooldownSeconds: { min: 0, max: 3600, integer: true, label: "Post cooldown (seconds)", help: "Minimum seconds between a player's posts; 0 disables it" },
   maxShortExposurePct: { min: 0, max: 5, label: "Max short exposure (fraction of capital)", help: "0.5 = you can short up to half your capital" },
@@ -93,6 +91,11 @@ function listErrors(key: string, value: unknown, bound: ListBound): string[] {
   return [];
 }
 
+/**
+ * Stored config merged over the defaults. Only known keys are read, so a
+ * stored doc may carry retired settings (e.g. `minHoursBetweenAutoCloses`,
+ * replaced by the close scheduler) without error; the next save drops them.
+ */
 export function mergeConfig(stored: Partial<GameConfig> | undefined | null): GameConfig {
   const out: GameConfig = { ...DEFAULT_CONFIG, prizeSplitPct: [...DEFAULT_CONFIG.prizeSplitPct] };
   if (!stored) return out;

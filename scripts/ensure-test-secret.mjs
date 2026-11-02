@@ -1,14 +1,14 @@
 // The functions emulator reads secrets from functions/.secret.local.
 // Create/extend it for local runs and CI (never used in production):
-// - CRON_SECRET for the weekly-close endpoint.
 // - DISCORD_WEBHOOK_URL pointing at the local capture server the integration
 //   tests start (functions/test/discord.test.ts). Swap in a real webhook URL to
 //   see posts in Discord while running `npm run emulators`.
+// (CRON_SECRET is no longer used: the weekly close runs from the
+// closeScheduler function, not a GitHub cron. A leftover line is harmless.)
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const path = new URL("../functions/.secret.local", import.meta.url);
 const defaults = {
-  CRON_SECRET: "local-emulator-secret-123456",
   DISCORD_WEBHOOK_URL: "http://127.0.0.1:8199/webhook",
 };
 const current = existsSync(path) ? readFileSync(path, "utf8") : "";

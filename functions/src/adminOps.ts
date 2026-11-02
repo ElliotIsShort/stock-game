@@ -1,9 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
-import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
-import { logger } from "firebase-functions";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { mergeConfig, validateConfigPatch, type Holding, type Player, type Post, type Stock } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin, requireAuth } from "./common";
+import { asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin } from "./common";
 import { closeWeek } from "./weeklyClose";
 
 /** Admin: edit config/global. Unknown keys and out-of-range values are rejected. */
@@ -83,37 +80,12 @@ export const delistPlayer = onCall(async (req) => {
   });
 });
 
-/** Admin button: manually trigger the weekly close. */
+/**
+ * Admin button: close the week now. Closing before `closesAt` leaves the
+ * scheduled time as it is (edit it with setCloseTime if needed).
+ */
 export const runWeeklyClose = onCall({ timeoutSeconds: 300 }, async (req) => {
   const adminId = await requireAdmin(req);
   const expectedWeek = reqNumber(asObject(req.data), "expectedWeek");
   return closeWeek({ trigger: "admin", actorId: adminId, expectedWeek });
-});
-
-const CRON_SECRET = defineSecret("CRON_SECRET");
-
-/**
- * HTTPS endpoint pinged weekly by GitHub Actions. Requires
- * `Authorization: Bearer <CRON_SECRET>`. Skips if the last close was too recent.
- */
-export const weeklyCloseCron = onRequest({ secrets: [CRON_SECRET], timeoutSeconds: 300 }, async (req, res) => {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "POST only" });
-    return;
-  }
-  const header = req.get("authorization") ?? "";
-  const expected = Buffer.from(`Bearer ${CRON_SECRET.value()}`);
-  const given = Buffer.from(header);
-  if (CRON_SECRET.value().length < 16 || given.length !== expected.length || !timingSafeEqual(given, expected)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  try {
-    const result = await closeWeek({ trigger: "cron", actorId: null });
-    logger.info("weeklyCloseCron", result);
-    res.json(result);
-  } catch (err) {
-    logger.error("weeklyCloseCron failed", err);
-    res.status(500).json({ error: "Weekly close failed" });
-  }
 });

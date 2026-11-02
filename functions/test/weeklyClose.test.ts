@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, WEEK_MS, targetPoolCash } from "@fsm/shared";
-import { call, cron, cronSecret, expectCallError, getDoc, listDocs, patchDoc, setupPlayers, signUp, wipeEmulators, type User } from "./helpers";
+import { call, expectCallError, getDoc, listDocs, patchDoc, setupPlayers, signUp, wipeEmulators, type User } from "./helpers";
 
 let alice: User;
 let bob: User;
@@ -206,21 +206,3 @@ async function setupMore(...names: string[]): Promise<User[]> {
   }
   return users;
 }
-
-describe("weeklyCloseCron endpoint", () => {
-  it("rejects missing or wrong secrets and non-POST requests", async () => {
-    expect((await cron(null)).status).toBe(401);
-    expect((await cron("wrong-secret-wrong-secret")).status).toBe(401);
-    expect((await cron(cronSecret(), "GET")).status).toBe(405);
-    expect((await getDoc("meta/state")).currentWeek).toBe(1);
-  });
-
-  it("closes the week, then skips if called again too soon", async () => {
-    const first = await (await cron(cronSecret())).json();
-    expect(first).toMatchObject({ closed: true, week: 1 });
-    const second = await (await cron(cronSecret())).json();
-    expect(second.closed).toBe(false);
-    expect(second.reason).toContain("min");
-    expect((await getDoc("meta/state")).currentWeek).toBe(2);
-  });
-});

@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import type { Player } from "@fsm/shared";
+import { advanceClosesAt, type Player } from "@fsm/shared";
 import { asObject, auditEntry, auditRef, db, initialState, refs, requireAdmin } from "./common";
 
 /** The admin must send this exact string; the UI makes them type it. */
@@ -33,6 +33,11 @@ export const resetGame = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async
   }
   const now = Date.now();
 
+  // Keep the weekly close slot (day and time) the admin chose, moved on if it has passed.
+  const oldState = (await refs.state().get()).data();
+  const oldClosesAt = oldState?.closesAt;
+  const closesAt = typeof oldClosesAt === "number" ? (oldClosesAt > now ? oldClosesAt : advanceClosesAt(oldClosesAt, now)) : undefined;
+
   // Who was playing, so their registrations can be re-queued after the wipe.
   const playersSnap = await db.collection("players").get();
   const wasActive = new Map(playersSnap.docs.map((d) => [d.id, (d.data() as Player).isActive]));
@@ -57,7 +62,7 @@ export const resetGame = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async
       requeued++;
     }
   }
-  writer.set(refs.state(), initialState(now));
+  writer.set(refs.state(), { ...initialState(now), ...(closesAt !== undefined ? { closesAt } : {}) });
   writer.set(auditRef(), auditEntry(adminId, "resetGame", null, { deleted, requeued, declined }, now));
   await writer.close();
 

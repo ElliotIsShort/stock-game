@@ -41,7 +41,7 @@ stock-game/
 ├── firestore.indexes.json Composite indexes for the feed/portfolio queries.
 ├── firebase.json          Firestore + functions config, emulator ports.
 ├── scripts/               ensure-test-secret.mjs (integration test setup).
-├── .github/workflows/     Pages deploy + weekly-close cron.
+├── .github/workflows/     Pages deploy (tests first).
 └── docs/                  This file + operational guides.
 ```
 
@@ -77,7 +77,7 @@ everywhere so the same types work on server, client and in stored reports.
 | `standings.ts` | `computeStandings`: net worth (less open-short liability), score and rank, shared by the client and `touch`. |
 | `recap.ts` | `Recap`/`TouchResult` shapes, `recapTraders`. |
 | `alerts.ts` | `validateAlert`, `alertFires`, `alertSummary`. |
-| `schedule.ts` | `WEEKLY_CLOSE_SCHEDULE` (must match the cron in `weekly-close.yml`), `nextScheduledClose` (skips slots the cron would skip under `minHoursBetweenAutoCloses`; `due` while a just-passed slot hasn't closed yet), `formatCountdown`. |
+| `schedule.ts` | The close time lives in `meta/state.closesAt`. `advanceClosesAt` (+7 days from the previous close, then whole weeks until it's in the future), `effectiveClosesAt` / `legacyClosesAt` (state from before `closesAt`: next Sunday 20:00 UTC, or a just-missed slot the old cron still owed), `closeTimeError` (admin input: ≥5 minutes ahead, ≤1 year), `nextScheduledClose` (countdown; `due` between `closesAt` and the scheduler running), `formatCloseTime` (Europe/London), `formatCountdown`. |
 | `types.ts` | Every Firestore document shape (the data model). |
 
 ### 3.1 The AMM (`amm.ts`)
@@ -178,7 +178,7 @@ All documents live at the paths below. IDs and relationships:
 |---|---|---|
 | `config/global` | fixed | All of `GameConfig` (see §4.1). Readable by any signed-in user. |
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
-| `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
+| `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `closesAt` (epoch ms the current week closes; admin-set via `setCloseTime`, advanced by whole weeks after each close at/after it; derived once from the old Sunday 20:00 UTC schedule and persisted by `closeScheduler`/`touch` if absent), `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
 | `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session. |
 | `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
@@ -209,7 +209,9 @@ keys, non-numbers, out-of-range, non-integers). Most settings are numbers
 (`NumberBound`); `prizeSplitPct` is a list (`ListBound`, `kind: "list"`): 1–10
 non-negative numbers with a positive first entry, edited as comma-separated
 text in the admin UI. `mergeConfig` falls back to the default for an invalid
-stored list.
+stored list, and only reads known keys, so a stored doc may still carry the
+retired `minHoursBetweenAutoCloses` (replaced by `closesAt` + `closeScheduler`);
+the next `updateConfig` drops it.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -224,7 +226,6 @@ stored list.
 | `flagMovePct` | 0.5 | Report flag: weekly stock move above this. |
 | `flagOwnershipPct` | 0.5 | Report flag: one holder owning more than this share. |
 | `flagCollusionMinTrades` | 3 | Report flag: back-and-forth trades each way. |
-| `minHoursBetweenAutoCloses` | 144 | Cron close is skipped inside this window (6 days). |
 | `maxPostLength` | 500 | Max post characters. |
 | `postCooldownSeconds` | 10 | Min seconds between a player's standalone posts (0 disables). |
 | `maxShortExposurePct` | 0.5 | Max open-short value as a fraction of capital. |
@@ -242,8 +243,10 @@ stored list.
 ## 5. `functions/` — Cloud Functions (`functions/src/`)
 
 Firebase Functions v2, region `europe-west2`, `maxInstances: 5`. Every function
-is `onCall` (callable, checks `request.auth`) except `weeklyCloseCron`, which is
-an `onRequest` HTTPS endpoint guarded by a bearer secret.
+is `onCall` (callable, checks `request.auth`) except the Firestore triggers and
+the two scheduled functions (`discordDigest`, `closeScheduler`; Cloud Scheduler
+gives 3 free jobs per billing account, don't add a third). There is no public
+HTTPS endpoint.
 
 `common.ts` holds the shared infrastructure: region/instance limits, Admin SDK
 init, typed document `refs`, `readConfig`/`readState`/`readWorld`, auth helpers
@@ -271,8 +274,9 @@ helpers.
 | `markNotificationsRead` | alerts.ts | player | Marks some or all of your notifications read. |
 | `updateConfig` | adminOps.ts | admin | Validates and merges a config patch; audits before/after. |
 | `delistPlayer` | adminOps.ts | admin | Pays every holder out at the last price, unlists the stock, deactivates the account, system post, audit. |
-| `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. |
-| `weeklyCloseCron` | adminOps.ts | bearer secret | HTTPS endpoint for the GitHub Actions cron; POST only, `Authorization: Bearer <CRON_SECRET>` (timing-safe, ≥16 chars); self-skips inside `minHoursBetweenAutoCloses`. |
+| `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. Before `closesAt` it leaves `closesAt` unchanged. |
+| `setCloseTime` | closeSchedule.ts | admin | Sets `meta/state.closesAt` (`closeTimeError`: ≥5 min ahead), audits before/after, posts "Week N now closes … UK time (was …)" to the feed and Discord. |
+| `closeScheduler` | closeSchedule.ts | every minute | Reads `meta/state` (1 read); if `now ≥ closesAt` calls `closeWeek` (`trigger: "schedule"`, `expectedWeek` = the week it read) — the transaction re-checks both, so overlapping ticks can't double-close. Persists a legacy-derived `closesAt` if missing. `retryCount: 0`. |
 | `setStockPhoto` | photo.ts | player / admin | Set/remove your own avatar (validated); admins may only remove others'. |
 | `renamePlayer` | rename.ts | admin | Renames player/stock/registration, then rewrites denormalised names across past trades/posts via a bulkWriter. |
 | `updateContent` | content.ts | admin | Patches the Rules markdown on `content/global` (the legacy `changelog` field is still accepted but no longer edited in the UI). |
@@ -285,7 +289,7 @@ helpers.
 `closeWeek` runs as one Firestore transaction so balances are never half-updated
 and trades can't interleave. Order (design §6):
 
-0. **Guards** — `expectedWeek` match (manual) and cron skip inside the min window.
+0. **Guards** — `expectedWeek` match (admin: error; scheduler: quiet skip) and, for the scheduler, `now ≥ closesAt` (re-read inside the transaction). The next `closesAt` is `advanceClosesAt(closesAt, now)` when closing at/after it, else unchanged.
 1. **Idle flagging** — mark players idle per `idleThresholdWeeks`.
 2. **Snapshot** all balances.
 3. **Weekly allowance** to active non-idle players.
@@ -295,7 +299,7 @@ and trades can't interleave. Order (design §6):
 7. **Leaderboard + winners** = `weeklyPrizeWinners`: the top `min(eligible, prizeSplitPct.length)` by `weeklyGrowth` among non-idle players with a positive start-of-week net worth.
 8. **Split the entire prize pool** among the winners by the rescaled `prizeSplitPct`, reset to 0 (rolls over if nobody is eligible). Stored as `highlights.winners[]` (`playerId`, `name`, `growth`, `prizeAmount`); `CloseResult` returns the same `winners` plus `prize` (total paid).
 9. **Build and store the WeeklyReport** (money, prices, health, activity, highlights, flags, markdown).
-10. **Writes**: updated players (incl. next week's `netWorthWeekStart`), append a net-worth history point, **reactivate bankrupt players**, reset stock weekly stats, advance `meta/state` to `week + 1` (`prizePool = remaining + borrowFeesCollected`), update each short's `borrowFeesPaid`, post a "Week N closed" system message, audit.
+10. **Writes**: updated players (incl. next week's `netWorthWeekStart`), append a net-worth history point, **reactivate bankrupt players**, reset stock weekly stats, advance `meta/state` to `week + 1` (`prizePool = remaining + borrowFeesCollected`, next `closesAt`), update each short's `borrowFeesPaid`, post a "Week N closed" system message, audit.
 
 Report flags (`computeFlags`): `bigMove` (weekly move beyond `flagMovePct`),
 concentration (one holder beyond `flagOwnershipPct`, ignoring dust), and
@@ -334,7 +338,8 @@ Firestore live and writes only through callable functions.
   media-query `.page { padding-bottom }` override above the base rule: the
   base `padding` shorthand wins and the tab bar covers the end of the page.
 - `components/MarketStrip.tsx` — on every page: close countdown
-  (`nextScheduledClose`, ticking via `useNow`) + the current top weekly grower
+  (`nextScheduledClose(now, state)` from `state.closesAt`, ticking via
+  `useNow`; "closing now…" for the up-to-a-minute gap before the scheduler runs) + the current top weekly grower
   (`lib/standings.ts` `liveContenders`, shared with `/leaderboard`), then a
   scrolling ticker tape of every listed stock (ticker, price, ▲/▼ week change,
   flashes on live price moves). The tape pauses on hover/focus; under reduced
@@ -372,7 +377,7 @@ Firestore live and writes only through callable functions.
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
 | `/rules` | Editable `content/global.rules`, rendered with `SimpleMarkdown`. Reached from the account menu. |
 | `/changelog` + `/changelog?id=` | The Dev diary: list of `devlog` entries, and a single entry with older/newer links. Reached from the account menu. |
-| `/admin` | Approvals, Players (+rename), Weekly close, Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |
+| `/admin` | Approvals, Players (+rename), Weekly close (close-time picker + close now), Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |
 
 **Components:** `Feed`, `TradePanel` (live AMM preview using the shared quote
 functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
@@ -447,8 +452,9 @@ respects `prefers-reduced-motion`.
 - `firestore.indexes.json`: composite indexes for `trades(stockId+createdAt)`,
   `trades(traderId+createdAt)`, `posts(taggedStockId+createdAt)`,
   `registrations(status+createdAt)`, `shorts(ownerId+status)`.
-- `weeklyCloseCron` is the only public endpoint; it is protected by a bearer
-  secret with a timing-safe comparison.
+- There are no public HTTPS endpoints: everything is a callable (auth checked)
+  or a trigger/scheduled function (v2 scheduled functions are private Cloud
+  Run services invoked only by Cloud Scheduler).
 
 ---
 
@@ -465,8 +471,8 @@ respects `prefers-reduced-motion`.
     Java 21 for the Firestore emulator) runs typecheck + unit + integration; a
     `build` job does the Next static export with `NEXT_PUBLIC_BASE_PATH=/<repo>`
     + Firebase vars and adds `.nojekyll`; a `deploy` job publishes to Pages.
-  - `weekly-close.yml` (cron `0 20 * * 0`, Sun 20:00 UTC, + dispatch): curls
-    `WEEKLY_CLOSE_URL` with `Bearer CRON_SECRET`.
+  - (The old `weekly-close.yml` GitHub cron is gone: it was best-effort and ran
+    hours late. The close is now `closeScheduler` + `meta/state.closesAt`.)
 - **Root scripts:** `build`, `typecheck`, `test` / `test:unit`
   (`vitest.unit.config.mts`) / `test:integration` (ensure-test-secret → build
   functions → `firebase emulators:exec --project demo-fsm`
@@ -477,8 +483,10 @@ respects `prefers-reduced-motion`.
     config validation, shorts, bankruptcy, positions, report markdown.
   - **Integration** (`functions/test/`): calls the real functions in the
     emulators as signed-in users — onboarding/approval, security rules, trading
-    & fees, posts/reactions/moderation, shorts + borrow fees, weekly close + cron
-    auth, admin ops, photos, reset. Always uses the `demo-fsm` project on
+    & fees, posts/reactions/moderation, shorts + borrow fees, weekly close,
+    `setCloseTime` + the scheduler (ticked via `tickScheduler()`, which POSTs
+    to the emulator's function route since the emulator has no Cloud
+    Scheduler), admin ops, photos, reset. Always uses the `demo-fsm` project on
     `127.0.0.1` and wipes the emulator before each test.
 
 Local dev needs **Node 22+** and **Java 21+** (for the Firestore emulator). See
@@ -515,7 +523,8 @@ full configurable-parameter set (§9).
 | **Dev diary** (was the change log) | `devlog/{id}`, `lib/devlog.ts`, `/changelog` (+ `?id=`), Admin → Dev diary | One entry per update (`DevlogEntry`: title, body, date). The page lists entries newest first (with a "New" badge for entries since your last visit, per device) and opens each on its own with older/newer links. Until any entry exists it shows the old `content.changelog` split by `# ` headings. |
 | **Audit log** | `auditLog/{id}`, Admin page | Every admin action records actor/target/details. |
 | **Post cooldown / spam guard** | `functions/social.ts`, `postCooldownSeconds` | Minimum seconds between a player's standalone posts. |
-| **Double-close protection** | `adminOps.ts` | Manual close carries the week number; cron enforces `minHoursBetweenAutoCloses`. |
+| **Double-close protection** | `adminOps.ts`, `closeSchedule.ts` | Manual close and every scheduler tick carry the week number they saw; `closeWeek` re-checks it (and `closesAt`) inside its transaction. |
+| **Admin-set close time + per-minute scheduler** | `shared/schedule.ts`, `functions/closeSchedule.ts`, Admin → Weekly close | `meta/state.closesAt` is the exact close instant (datetime picker in the browser's timezone, echoed in UK time). `closeScheduler` closes within a minute of it and moves it on 7 days. Replaced the GitHub Actions cron and `minHoursBetweenAutoCloses`. |
 | **Tickers** | `shared/ticker.ts`, `functions/ticker.ts`, `TickerEditor` | Players pick a unique 2–5 letter ticker; default from their name at listing. Shown on the market, stock page, feed trade cards and the tape. |
 | **Close countdown + ticker tape** | `shared/schedule.ts`, `MarketStrip` | On every page under the top bar. |
 | **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |

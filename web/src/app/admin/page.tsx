@@ -7,6 +7,9 @@ import { doc } from "firebase/firestore";
 import {
   CONFIG_BOUNDS,
   DEFAULT_RULES,
+  closeTimeError,
+  effectiveClosesAt,
+  formatCloseTime,
   MAX_DEVLOG_TITLE,
   devlogDateFromIso,
   devlogDateToIso,
@@ -411,18 +414,85 @@ function Approvals() {
   );
 }
 
+/** Epoch ms → the browser-local "YYYY-MM-DDTHH:mm" a datetime-local input wants. */
+function toLocalInput(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Admin: pick the exact close time. The input is in the browser's timezone; the UK time is echoed back. */
+function CloseTimeEditor() {
+  const { state } = useGame();
+  const { busy, run, view } = useAction();
+  const current = state ? effectiveClosesAt(state, Date.now()) : null;
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    if (current !== null) setValue(toLocalInput(current));
+  }, [current]);
+  const picked = value ? new Date(value).getTime() : Number.NaN;
+  const problem = value ? closeTimeError(picked, Date.now()) : null;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        run(async () => {
+          const err = closeTimeError(picked, Date.now());
+          if (err) throw new Error(err);
+          const res = await api.setCloseTime(picked);
+          return `Week ${res.week} now closes ${formatCloseTime(res.closesAt)} UK time.`;
+        });
+      }}
+    >
+      <p className="small">
+        {current !== null ? (
+          <>Week {state?.currentWeek} closes <strong>{formatCloseTime(current)}</strong> UK time. After each scheduled close it moves on 7 days.</>
+        ) : (
+          "No close time yet."
+        )}
+      </p>
+      <div className="row wrap">
+        <label>
+          New close time (your timezone: {zone})
+          <input
+            type="datetime-local"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            aria-invalid={problem ? true : undefined}
+            aria-describedby="close-time-echo"
+            required
+          />
+        </label>
+      </div>
+      <p id="close-time-echo" className={problem ? "error small" : "muted small"} aria-live="polite">
+        {problem ?? (Number.isFinite(picked) ? `That's ${formatCloseTime(picked)} in UK time (Europe/London).` : "")}
+      </p>
+      <div className="row">
+        <button type="submit" disabled={busy || Boolean(problem) || !Number.isFinite(picked) || picked === current}>
+          Set close time
+        </button>
+      </div>
+      {view}
+    </form>
+  );
+}
+
 function WeeklyClose() {
   const { state, config } = useGame();
   const { busy, run, view } = useAction();
   const week = state?.currentWeek ?? 1;
   return (
-    <section className="card">
+    <section className="card stack">
       <h2>Weekly close</h2>
       <p className="muted small">
         Snapshots balances, pays allowances and CEO bonuses, tops up pools, splits the {gbp(state?.prizePool ?? 0)} prize pool among the
         top weekly growers ({prizeSplitText(config.prizeSplitPct)}) and stores the report.{" "}
-        {state?.lastCloseAt ? `Last close ${ago(state.lastCloseAt)}.` : "Never closed."}
+        {state?.lastCloseAt ? `Last close ${ago(state.lastCloseAt)}.` : "Never closed."} The scheduler closes the week within a minute
+        of the close time. Closing early by hand leaves the scheduled time unchanged.
       </p>
+      <CloseTimeEditor />
       <button
         type="button"
         className="primary"

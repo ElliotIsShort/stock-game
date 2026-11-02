@@ -206,6 +206,14 @@ export function bankruptcyMessage(uid: string, name: string, debt: number, short
   };
 }
 
+export function closeTimeMessage(week: number, when: string, was: string): DiscordMessage {
+  return {
+    title: `⏱ Week ${week} now closes ${when} (UK time)`,
+    description: `Was ${was}.`,
+    color: DISCORD_COLOR.info,
+  };
+}
+
 export function recordMessage(ownerId: string, ticker: string, kind: "high" | "low", price: number): DiscordMessage {
   return {
     ping: `${mention(ownerId)}, your stock just hit an all-time ${kind}.`,

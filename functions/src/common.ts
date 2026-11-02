@@ -2,7 +2,7 @@ import { initializeApp } from "firebase-admin/app";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { getFirestore, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
-import { mergeConfig, type GameConfig, type GameState, type Holding, type NetWorthHistory, type Player, type Short, type Stock } from "@fsm/shared";
+import { effectiveClosesAt, legacyClosesAt, mergeConfig, type GameConfig, type GameState, type Holding, type NetWorthHistory, type Player, type Short, type Stock } from "@fsm/shared";
 
 /** Change to the region closest to your players (also update web/.env). */
 export const REGION = "europe-west2";
@@ -29,7 +29,24 @@ export const refs = {
 };
 
 export function initialState(now: number): GameState {
-  return { currentWeek: 1, prizePool: 0, weekFees: 0, weekStartedAt: now, lastCloseAt: null };
+  return { currentWeek: 1, prizePool: 0, weekFees: 0, weekStartedAt: now, lastCloseAt: null, closesAt: legacyClosesAt(now, null) };
+}
+
+/**
+ * Migration: state written before `closesAt` existed gets it derived once
+ * from the old schedule (next Sunday 20:00 UTC) and persisted. Returns the
+ * close time. One read; one write only the first time.
+ */
+export async function ensureClosesAt(now: number): Promise<number | null> {
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(refs.state());
+    if (!snap.exists) return null;
+    const state = snap.data()!;
+    if (typeof state.closesAt === "number") return state.closesAt;
+    const closesAt = effectiveClosesAt(state, now);
+    tx.update(refs.state(), { closesAt });
+    return closesAt;
+  });
 }
 
 export async function readConfig(tx: Transaction): Promise<GameConfig> {

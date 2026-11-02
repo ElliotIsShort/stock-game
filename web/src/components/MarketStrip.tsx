@@ -24,12 +24,13 @@ function CloseCountdown() {
   const leader = liveContenders(players, state, config)[0];
   if (!state || now === null) return <div className="strip-close" />;
 
-  const next = nextScheduledClose(now, state.lastCloseAt, config.minHoursBetweenAutoCloses);
+  // closesAt from game state (admin-set); "closing now" covers the minute until the scheduler runs.
+  const next = nextScheduledClose(now, state);
   const when = new Date(next.at).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
   return (
     <div className="strip-close">
-      <span className="strip-timer" title={`Automatic close: ${when}`}>
+      <span className="strip-timer" title={`Week ${state.currentWeek} closes ${when}`}>
         <span aria-hidden="true">⏱</span>{" "}
         <span className="strip-verbose">Week {state.currentWeek} </span>
         {next.due ? (

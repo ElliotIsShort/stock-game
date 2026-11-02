@@ -10,7 +10,7 @@ Every member of a friend group is a tradable stock. Players trade each other wit
 | `functions/` | Firebase Cloud Functions. Every balance change (register/approve, trade, posts, reactions, weekly close, delist, config) runs here. Bundled with esbuild so `shared/` is inlined |
 | `web/` | Next.js static export for GitHub Pages. Reads Firestore live; writes only through callable functions |
 | `firestore.rules` | Clients can read game data but never write anything. Only the Admin SDK (functions) writes |
-| `.github/workflows/` | Pages deploy on push to `main`, and a weekly cron that pings the close endpoint |
+| `.github/workflows/` | Tests, then a Pages deploy on push to `main` |
 
 ### Firestore collections
 
@@ -27,7 +27,7 @@ Needs Node 22+ and Java 21+ (for the Firestore emulator). On macOS: `brew instal
 ```sh
 npm install
 cp web/.env.example web/.env.local      # set NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-fsm, NEXT_PUBLIC_USE_EMULATORS=true
-echo 'CRON_SECRET=any-local-secret-16+' > functions/.secret.local
+node scripts/ensure-test-secret.mjs      # writes functions/.secret.local for the emulator
 npm run emulators                        # auth, firestore (8180), functions on the demo-fsm project
 npm run dev:web                          # in another terminal
 ```
@@ -45,7 +45,7 @@ npm run test:integration  # starts the emulators, runs the suite, shuts them dow
 ```
 
 - **Unit** (`shared/test/`): AMM maths against the design doc's worked example, pool sizing and top-ups, starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule, config validation, photo validation, report markdown, ticker validation/defaults, close-countdown schedule, Discord message rendering/mentions/rate limit, awards and badges, standings, price records, alerts.
-- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the cron endpoint's secret, config changes, delisting, stock photos, tickers (defaults, uniqueness, cooldown, legacy backfill), Discord posts (captured by a local webhook server: mentions, rate limit + digest, close post, on/off), price alerts and notifications, the recap, awards, price history/records and the full reset.
+- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the close time and per-minute scheduler (due/not due, overlapping ticks, legacy state), config changes, delisting, stock photos, tickers (defaults, uniqueness, cooldown, legacy backfill), Discord posts (captured by a local webhook server: mentions, rate limit + digest, close post, on/off), price alerts and notifications, the recap, awards, price history/records and the full reset.
 
 Integration tests always use the `demo-fsm` project on `127.0.0.1`, so they can't touch the live Firebase project. They wipe the emulator before each test.
 
@@ -55,12 +55,12 @@ GitHub Actions runs typecheck + both suites on every push and pull request. A pu
 
 1. Create a Firebase project, enable **Authentication** (Email/Password and Google), **Firestore**, and upgrade to the **Blaze** plan (needed for Cloud Functions). Set a billing budget alert (e.g. £1).
 2. `cp .firebaserc.example .firebaserc` and set your project id.
-3. Set the cron secret: `npx firebase functions:secrets:set CRON_SECRET` (use a long random string).
+3. (No cron secret any more: the weekly close runs from the `closeScheduler` function.)
 4. `npm run deploy:backend` runs the tests, then deploys functions, rules and indexes. Region is `europe-west2`; change `REGION` in `functions/src/common.ts` and `NEXT_PUBLIC_FUNCTIONS_REGION` together.
 5. Create `admins/<your uid>` in the Firestore console.
 6. GitHub repo → Settings → Pages → Source: **GitHub Actions**. Add repository **variables** `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`, `NEXT_PUBLIC_FUNCTIONS_REGION`. Push to `main`.
 7. In Firebase Auth → Settings → Authorized domains, add `<user>.github.io`.
-8. For the automatic weekly close, add repository **secrets** `WEEKLY_CLOSE_URL` (the `weeklyCloseCron` function URL) and `CRON_SECRET`. It runs Sundays 20:00 UTC and skips itself if a close ran within `minHoursBetweenAutoCloses`. Admins can also close manually from the Admin page.
+8. The weekly close is automatic: `closeScheduler` (a Cloud Scheduler job, every minute) closes the week within a minute of `meta/state.closesAt` and moves it on 7 days. Set the time under Admin → Weekly close (it starts as the next Sunday 20:00 UTC). Admins can also close by hand there; closing early leaves the scheduled time alone. The old GitHub Actions cron is gone, so the `WEEKLY_CLOSE_URL` and `CRON_SECRET` repository secrets are no longer needed: delete them (GitHub → Settings → Secrets and variables → Actions), and optionally the `CRON_SECRET` Functions secret (`npx firebase functions:secrets:destroy CRON_SECRET`).
 9. Discord (optional), see below.
 
 ### Discord
@@ -69,7 +69,7 @@ The market posts to one Discord channel through a webhook. There's no bot to hos
 
 1. In Discord, open the channel's settings (⚙️ next to its name) → **Integrations** → **Webhooks** → **New Webhook**. Name it "Stonker" (and give it the icon from `web/public/icons/icon-512.png` if you like), then **Copy Webhook URL**. You need "Manage Webhooks" permission on the server.
 2. Store it as a Functions secret: `npx firebase functions:secrets:set DISCORD_WEBHOOK_URL` and paste the URL. It is never written to Firestore (clients can read Firestore). Anyone with the URL can post to the channel, so treat it like a password; if it leaks, delete the webhook in Discord and make a new one.
-3. `npm run deploy:backend`. This also creates an hourly Cloud Scheduler job for the digest (the first three jobs per billing account are free).
+3. `npm run deploy:backend`. This also creates an hourly Cloud Scheduler job for the digest. With `closeScheduler` that's two jobs; the first three per billing account are free, so don't add a third.
 4. Admin page → **Discord** → **Send test message**.
 5. Players link their account on their profile (account menu → My profile → Discord) by pasting their Discord user ID, so posts can @mention them.
 
@@ -89,10 +89,10 @@ These fill gaps the design doc left open:
 - **Listing pool size** uses the average net worth of active players *including the newcomer*, so the first player's pool is sized from their own starting cash.
 - **Delisting** pays holders shares × last price (no fee, no pool impact), removes the stock from trading and deactivates the account. The player's own holdings in other stocks stay put.
 - **Report flags** have their own config: `flagMovePct` (weekly move), `flagOwnershipPct` (one holder's share of player-held shares, ignoring dust), `flagCollusionMinTrades` (both players trading each other's stock at least N times in a week).
-- **Double-close protection**: the admin button sends the week it's closing, so a double click can't close two weeks; the cron endpoint enforces `minHoursBetweenAutoCloses`.
+- **Double-close protection**: the admin button and every scheduler tick send the week they saw, and the close re-checks it inside its transaction, so a double click or overlapping ticks can't close two weeks.
 - **Full reset** (Admin page, type RESET): deletes all players, stocks, holdings, trades, posts, photos and reports, and restarts at week 1. Keeps sign-in accounts, admins, settings and the audit log. Active players go back to pending so an admin can re-approve them as fresh founders; delisted players are marked declined. It isn't one transaction, so don't run it mid-trading.
 - **Tickers**: everyone gets a default from their name when listed (Joe Bloggs → JOE, then BLO, JBL…) and can pick their own 2–5 letter ticker from their stock page, once per `tickerChangeCooldownHours`. Unique across all stocks, including delisted ones. Stocks listed before tickers existed get the same defaults in listing order, saved the next time anyone lists or changes a ticker.
-- **Close countdown** assumes the cron schedule in `weekly-close.yml` (Sundays 20:00 UTC, mirrored in `shared/src/schedule.ts`) and skips a Sunday the cron would skip after a recent manual close.
+- **Close time** is game state (`meta/state.closesAt`), set by an admin and moved on exactly 7 days after each scheduled close (whole weeks are skipped after an outage). The countdown reads it, and shows "closing now…" for the minute until the scheduler runs. Game state from before this gets the next Sunday 20:00 UTC once.
 - **Preferences** (theme, sounds) are per device, in localStorage. Sounds are off by default.
 - **Discord** posts big trades and shorts (≥ `discordBigTradePct` × average net worth, measured on the cash moved, or shares × pre-trade price for a short), listings, bankruptcies, all-time highs/lows (at most one each per stock per week, and only after a stock's first weekly close), price alerts and the weekly close with winners, index and awards. Closes, listings, bankruptcies and alerts always post; everything else is capped at `discordMaxPerHour` per clock hour and the overflow goes into an hourly digest. Mentions only ping players who linked their Discord ID; `allowed_mentions` never lets @everyone or a stray ID in a post ping anyone.
 - **Weekly awards** (in the report, the close post and as profile badges): Biggest Mover (largest weekly % move, either way), Bag Holder (largest paper £ loss on one holding), Diamond Hands (longest unbroken holding without a sell, held since before the week started), Most Reacted Post, Worst Take (most 👎). Holdings under £1 are ignored. Cost basis and holding start are tracked on each holding; older holdings are rebuilt from trades on their next trade or close.
@@ -106,4 +106,4 @@ These fill gaps the design doc left open:
 
 - Firestore rules deny all client writes; cash, pools and prices are only written by functions.
 - Game data is readable by approved players and admins only; pending users can read just their own registration.
-- `weeklyCloseCron` is a public HTTPS endpoint guarded by a bearer secret (timing-safe compare, min 16 chars). Everything else is a callable that checks the caller's auth and, for admin actions, the `admins/{uid}` doc.
+- There's no public HTTPS endpoint. Everything is a callable that checks the caller's auth and, for admin actions, the `admins/{uid}` doc, or a Firestore/scheduled trigger.

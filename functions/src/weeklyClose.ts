@@ -430,6 +430,8 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
         weekHigh: s.price,
         weekLow: s.price,
         weekTradeCount: 0,
+        // Legacy: the feed sparkline's price list is no longer kept.
+        recentPrices: FieldValue.delete(),
       });
     }
     for (const [key, stats] of backfill) {

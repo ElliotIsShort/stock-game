@@ -151,7 +151,7 @@ export const trade = onCall(async (req) => {
       };
       tx.set(postRef, post);
     }
-    const tradeDoc: Trade = { id: tradeRef.id, ...tradeData, linkedPostId, recentPrices: tick.recentPrices };
+    const tradeDoc: Trade = { id: tradeRef.id, ...tradeData, linkedPostId };
     tx.set(tradeRef, tradeDoc);
 
     announceTrade(tx, {

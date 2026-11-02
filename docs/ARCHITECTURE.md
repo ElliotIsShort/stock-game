@@ -72,7 +72,7 @@ everywhere so the same types work on server, client and in stored reports.
 | `config.ts` | `DEFAULT_CONFIG`, `CONFIG_BOUNDS`, `mergeConfig`, `validateConfigPatch`. |
 | `ticker.ts` | Stock tickers: `validateTicker` (2–5 letters A–Z), `tickerCandidates`/`defaultTicker` (from the name), `assignTickers` (stored ticker, or a deterministic legacy default in listing order). |
 | `discord.ts` | `DiscordMessage` + builders (`bigTradeMessage`, `listingMessage`, `bankruptcyMessage`, `recordMessage`, `alertMessage`, `weeklyCloseMessage`, `digestMessage`), `renderWebhookBody` (token → mention, `allowed_mentions` = only resolved users, Discord length limits), `escapeUserText`, `rateDecision`. |
-| `stockStats.ts` | `priceTick` (recent prices + all-time high/low + once-a-week record announcements), `holdingAfterBuy`/`holdingAfterSell` (cost basis + holding run). |
+| `stockStats.ts` | `priceTick` (all-time high/low + once-a-week record announcements), `holdingAfterBuy`/`holdingAfterSell` (cost basis + holding run). |
 | `awards.ts` | `AWARD_META`, `computeAwards` (the five weekly awards), `badgesFor` (profile badges from reports). |
 | `standings.ts` | `computeStandings`: net worth (less open-short liability), score and rank, shared by the client and `touch`. |
 | `recap.ts` | `Recap`/`TouchResult` shapes, `recapTraders`. |
@@ -180,10 +180,10 @@ All documents live at the paths below. IDs and relationships:
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
 | `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
 | `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session. |
-| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `recentPrices` (last 24 post-trade prices), `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). |
+| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
-| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`), optional `recentPrices` (the stock's recent prices up to this trade, for the feed sparkline). |
+| `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`), optional deprecated `recentPrices` (only on trades from before the feed sparkline was removed; no longer written). |
 | `posts/{id}` | auto | `authorId/Name` ("system"/"Market" for system posts), `taggedStockId/Name`, `text`, `linkedTradeId`, `linkedTradeSummary`, `reactions` (type→uid[]), `reactionCount`, `system`, `week`, `createdAt`. |
 | `photos/{uid}` | auth uid | `dataUrl`, `updatedAt`. Separate from the stock doc so price ticks don't resend image bytes. |
 | `devlog/{id}` | auto | `DevlogEntry`: `title`, `body` (same markup as Rules), `date` (noon UTC of the shown day), `createdAt`, `updatedAt`. Readable by anyone signed in; kept by a reset. |
@@ -328,6 +328,11 @@ Firestore live and writes only through callable functions.
   `.chrome` holds the top bar and the `MarketStrip`. At ≤600px the top nav is
   hidden and a fixed bottom tab bar (`.tabbar`, icons in `NavIcons.tsx`,
   safe-area aware) takes over; both navs are rendered and CSS picks one.
+  The tab bar's footprint is the `--tabbar-space` CSS variable (0 on desktop,
+  `--tabbar-h + env(safe-area-inset-bottom)` on phones); `.page` reserves it
+  as bottom padding in its single base rule. Don't add a separate
+  media-query `.page { padding-bottom }` override above the base rule: the
+  base `padding` shorthand wins and the tab bar covers the end of the page.
 - `components/MarketStrip.tsx` — on every page: close countdown
   (`nextScheduledClose`, ticking via `useNow`) + the current top weekly grower
   (`lib/standings.ts` `liveContenders`, shared with `/leaderboard`), then a
@@ -515,7 +520,7 @@ full configurable-parameter set (§9).
 | **Close countdown + ticker tape** | `shared/schedule.ts`, `MarketStrip` | On every page under the top bar. |
 | **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |
 | **Mobile tab bar + installable PWA** | `Shell`, `app/manifest.ts`, `public/sw.js` | Bottom tabs on phones; Add to Home Screen. |
-| **Feed polish** | `Feed.tsx` | Trade cards show ticker, £ / % price delta with ▲/▼ and a sparkline (`trade.recentPrices`); names link to profiles; reactions bounce and their counts roll when they change live. |
+| **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼ (the per-trade sparkline was removed); names link to profiles; reactions bounce and their counts roll when they change live. |
 | **Discord webhook** | `shared/discord.ts`, `functions/discord.ts`, `marketEvents.ts`, `DiscordLink`, Admin → Discord | Outbox + Firestore trigger, hourly rate limit + digest, @mentions for linked players. Webhook URL only in the `DISCORD_WEBHOOK_URL` secret. Slash commands are a possible next step (HTTP interactions endpoint). |
 | **Weekly awards + badges** | `shared/awards.ts`, `weeklyClose.ts` | Stored on `report.highlights.awards`; shown in the report, results screen, close post and as profile badges. |
 | **Recap** | `functions/recap.ts`, `RecapCard` | "While you were away" after `recapAfterHours`. |

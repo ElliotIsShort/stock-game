@@ -42,9 +42,9 @@ export function applyBankruptcySettlement(
     const newShares = s.poolShares + sale.shares;
     const newCash = (s.poolCash * s.poolShares) / newShares;
     const price = newCash / newShares;
-    // Keep sparklines and records honest; fire sales don't get their own Discord post.
-    const { recentPrices, allTimeHigh, allTimeLow } = priceTick(s, price, week).patch;
-    tx.update(refs.stock(s.id), { poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, recentPrices, allTimeHigh, allTimeLow });
+    // Keep records honest; fire sales don't get their own Discord post.
+    const { allTimeHigh, allTimeLow } = priceTick(s, price, week).patch;
+    tx.update(refs.stock(s.id), { poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, allTimeHigh, allTimeLow });
     tx.delete(refs.holding(debtor.uid, sale.stockId));
   }
 

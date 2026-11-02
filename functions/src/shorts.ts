@@ -93,7 +93,7 @@ export const openShort = onCall(async (req) => {
       borrowFeesPaid: 0,
     };
     tx.set(shortRef, short);
-    recordTrade(tx, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText, recentPrices: tick.recentPrices });
+    recordTrade(tx, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText });
     // A short's size for Discord is the value sold at the pre-trade price.
     announceTrade(tx, { kind: "openShort", traderName: player.displayName, stock, cash: shares * q.priceBefore, shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
     return short;
@@ -145,7 +145,7 @@ export const closeShort = onCall(async (req) => {
       closedAt: now,
       closeWeek: state.currentWeek,
     });
-    recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText, recentPrices: tick.recentPrices });
+    recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText });
     announceTrade(tx, { kind: "closeShort", traderName: player.displayName, stock, cash: q.cost, shares: short.shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
 
     if (q.cost > player.cash + 1e-6) {
@@ -181,7 +181,6 @@ function recordTrade(
     now: number;
     kind: "openShort" | "closeShort";
     postText: string | null;
-    recentPrices: number[];
   },
 ) {
   const tradeRef = db.collection("trades").doc();
@@ -224,6 +223,5 @@ function recordTrade(
     week: a.week,
     createdAt: a.now,
     linkedPostId,
-    recentPrices: a.recentPrices,
   });
 }

@@ -8,7 +8,6 @@ import { fb } from "@/lib/firebase";
 import { prefersReducedMotion, useMediaQuery, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
 import { ago, changeClass, gbp, pct, profileHref, shares, signedGbp, stockHref } from "@/lib/format";
-import { Sparkline } from "./StatCard";
 import { playSound } from "@/lib/sound";
 import { feedCutoff } from "@/lib/pagination";
 import { Avatar } from "./Avatar";
@@ -168,8 +167,6 @@ function TradeItem({ trade }: { trade: Trade }) {
         <span className={`delta ${changeClass(move)}`}>
           <span aria-hidden="true">{move > 0.00005 ? "▲" : move < -0.00005 ? "▼" : "■"}</span> {signedGbp(trade.priceAfter - trade.priceBefore)} ({pct(move)})
         </span>
-        {/* Recent prices up to this trade (stored on the trade). Older trades don't have them. */}
-        {trade.recentPrices && trade.recentPrices.length >= 3 && <Sparkline values={trade.recentPrices} className="trade-spark" />}
       </div>
       {mine && !trade.linkedPostId && (
         annotating ? (

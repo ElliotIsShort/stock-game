@@ -132,8 +132,6 @@ export interface Stock {
   ticker?: string;
   /** When the owner last changed their ticker (cooldown). */
   tickerChangedAt?: number;
-  /** The last RECENT_PRICES_MAX prices after each trade, oldest first (feed sparklines). */
-  recentPrices?: number[];
   /** Highest / lowest price ever traded. Absent until the first trade after this field was added. */
   allTimeHigh?: number;
   allTimeLow?: number;
@@ -209,7 +207,10 @@ export interface Trade {
   linkedPostId?: string | null;
   /** Present when this trade opened or closed a short, so the feed can label it. */
   kind?: "openShort" | "closeShort";
-  /** The stock's recent prices up to and including priceAfter, for the feed card's sparkline. */
+  /**
+   * @deprecated No longer written (the feed card's sparkline was removed).
+   * Kept optional so trades stored before then still type-check.
+   */
   recentPrices?: number[];
 }
 

@@ -42,15 +42,20 @@ describe("while you were away", () => {
 });
 
 describe("price history and records", () => {
-  it("stores recent prices on the stock and each trade, and tracks all-time highs", async () => {
+  it("tracks all-time highs without storing recent prices", async () => {
     const t = await call(alice, "trade", { stockId: bob.uid, side: "buy", amount: 100 });
-    expect(t.recentPrices).toEqual([50, t.priceAfter]);
+    expect(t.recentPrices).toBeUndefined();
+    expect((await listDocs("trades"))[0].recentPrices).toBeUndefined();
     const stock = await getDoc(`stocks/${bob.uid}`);
-    expect(stock).toMatchObject({ recentPrices: [50, t.priceAfter], allTimeHigh: t.priceAfter, allTimeLow: 50 });
+    expect(stock).toMatchObject({ allTimeHigh: t.priceAfter, allTimeLow: 50 });
+    expect(stock.recentPrices).toBeUndefined();
+    // Legacy stocks lose their stale price list at the next close.
+    await patchDoc(`stocks/${cara.uid}`, { recentPrices: [1, 2, 3] });
     // Week 1: too fresh to announce records.
     expect((await listDocs("discordOutbox")).some((d) => d.kind === "allTimeHigh")).toBe(false);
 
     await call(alice, "runWeeklyClose", { expectedWeek: 1 });
+    expect((await getDoc(`stocks/${cara.uid}`)).recentPrices).toBeUndefined();
     await call(cara, "trade", { stockId: bob.uid, side: "buy", amount: 100 });
     const records = (await listDocs("discordOutbox")).filter((d) => d.kind === "allTimeHigh");
     expect(records).toHaveLength(1);

@@ -20,6 +20,8 @@
   --shadow: rgba(0, 0, 0, .5);
   --radius: 10px;
   --tabbar-h: 0px;
+  /* Room the fixed bottom tab bar takes up (0 on desktop). Scrolling content reserves this much at its end. */
+  --tabbar-space: 0px;
   color-scheme: dark;
 }
 
@@ -50,6 +52,9 @@
 
 html, body {
   margin: 0;
+  /* 100vh is taller than the visible area on mobile (it ignores the URL bar); dvh tracks it. */
+  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -85,7 +90,7 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
 .tabbar { display: none; }
 
 @media (max-width: 600px) {
-  :root { --tabbar-h: 58px; }
+  :root { --tabbar-h: 58px; --tabbar-space: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px)); }
   .topbar { gap: .5rem .75rem; padding: .55rem .9rem; flex-wrap: nowrap; }
   .topnav { display: none; }
   .me { gap: .75rem; margin-left: auto; font-size: .9rem; }
@@ -103,10 +108,17 @@ h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
   .tabbar a[aria-current="page"] { color: var(--accent); }
   .tabbar a svg { transition: transform .15s ease-out; }
   .tabbar a:active svg { transform: scale(.9); }
-  .page { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 1.25rem); }
 }
 
-.page { max-width: 1000px; margin: 0 auto; padding: 1.25rem; }
+/*
+ * The bottom padding reserves the tab bar's height on phones. It lives in this
+ * one rule (driven by --tabbar-space) rather than a media-query override: an
+ * override declared above this rule was silently beaten by the `padding`
+ * shorthand, so the fixed tab bar covered the end of every page.
+ */
+.page { max-width: 1000px; margin: 0 auto; padding: 1.25rem 1.25rem calc(1.25rem + var(--tabbar-space)); }
+/* Keyboard focus / scrollIntoView never parks an element under the tab bar. */
+html { scroll-padding-bottom: var(--tabbar-space); }
 .stack { display: flex; flex-direction: column; gap: 1rem; }
 .row { display: flex; gap: .5rem; align-items: center; }
 .row.between { justify-content: space-between; }
@@ -456,7 +468,6 @@ code { background: var(--panel-2); padding: .1rem .3rem; border-radius: 4px; }
 .danger-zone { border-color: var(--down); }
 
 a.strong-link { color: var(--text); font-weight: 600; }
-.trade-spark { display: inline-block; width: 72px; height: 18px; vertical-align: middle; margin-left: auto; }
 a.button-link {
   display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 6px; padding: .45rem .9rem;
   background: var(--panel-2); color: var(--text);

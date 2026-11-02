@@ -1,31 +1,27 @@
 import type { Holding, Stock } from "./types";
 
-/** How many recent prices each stock keeps for feed sparklines. */
-export const RECENT_PRICES_MAX = 24;
-
 export interface PriceTick {
   /** Fields to merge into the stock doc. */
-  patch: Pick<Stock, "recentPrices" | "allTimeHigh" | "allTimeLow"> & Partial<Pick<Stock, "athAnnouncedWeek" | "atlAnnouncedWeek">>;
-  /** The stock's recent prices after this tick (also stored on the trade). */
-  recentPrices: number[];
+  patch: Pick<Stock, "allTimeHigh" | "allTimeLow"> & Partial<Pick<Stock, "athAnnouncedWeek" | "atlAnnouncedWeek">>;
   announceHigh: boolean;
   announceLow: boolean;
 }
 
 /**
- * Bookkeeping for one price change: append to recent prices and track all-time
- * highs/lows. A new record is announced at most once per stock per week, and
+ * Bookkeeping for one price change: track all-time highs/lows. (Stocks used
+ * to keep a list of recent prices for the feed sparkline; that's gone, and old
+ * docs' stale `recentPrices` field is dropped at the next weekly close.)
+ * A new record is announced at most once per stock per week, and
  * only once the stock has been through a weekly close (so a fresh listing's
  * first sell isn't an "all-time low"). Stocks from before these fields existed
  * start from the best record we have (list price + this week's range) and the
  * initialising tick never announces.
  */
 export function priceTick(
-  stock: Pick<Stock, "price" | "listPrice" | "weekHigh" | "weekLow" | "weekOpenPrice" | "listedWeek" | "recentPrices" | "allTimeHigh" | "allTimeLow" | "athAnnouncedWeek" | "atlAnnouncedWeek">,
+  stock: Pick<Stock, "price" | "listPrice" | "weekHigh" | "weekLow" | "weekOpenPrice" | "listedWeek" | "allTimeHigh" | "allTimeLow" | "athAnnouncedWeek" | "atlAnnouncedWeek">,
   priceAfter: number,
   week: number,
 ): PriceTick {
-  const recentPrices = [...(stock.recentPrices?.length ? stock.recentPrices : [stock.price]), priceAfter].slice(-RECENT_PRICES_MAX);
   const initialising = stock.allTimeHigh === undefined || stock.allTimeLow === undefined;
   const ath = stock.allTimeHigh ?? Math.max(stock.listPrice, stock.weekHigh, stock.weekOpenPrice, stock.price);
   const atl = stock.allTimeLow ?? Math.min(stock.listPrice, stock.weekLow, stock.weekOpenPrice, stock.price);
@@ -36,13 +32,11 @@ export function priceTick(
   const announceLow = newLow && seasoned && stock.atlAnnouncedWeek !== week;
   return {
     patch: {
-      recentPrices,
       allTimeHigh: Math.max(ath, priceAfter),
       allTimeLow: Math.min(atl, priceAfter),
       ...(announceHigh ? { athAnnouncedWeek: week } : {}),
       ...(announceLow ? { atlAnnouncedWeek: week } : {}),
     },
-    recentPrices,
     announceHigh,
     announceLow,
   };

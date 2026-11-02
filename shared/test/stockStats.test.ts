@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { RECENT_PRICES_MAX, holdingAfterBuy, holdingAfterSell, priceTick } from "../src/stockStats";
+import { holdingAfterBuy, holdingAfterSell, priceTick } from "../src/stockStats";
 
 const base = { price: 50, listPrice: 50, weekHigh: 55, weekLow: 45, weekOpenPrice: 50, listedWeek: 1 };
 
 describe("priceTick", () => {
   it("initialises records from what we know and never announces on that tick", () => {
     const t = priceTick(base, 60, 3);
-    expect(t.patch).toMatchObject({ allTimeHigh: 60, allTimeLow: 45, recentPrices: [50, 60] });
+    expect(t.patch).toMatchObject({ allTimeHigh: 60, allTimeLow: 45 });
     expect(t.announceHigh).toBe(false);
   });
 
@@ -22,12 +22,8 @@ describe("priceTick", () => {
     expect(priceTick(seasoned, 52, 3)).toMatchObject({ announceHigh: false, announceLow: false });
   });
 
-  it("keeps a bounded list of recent prices", () => {
-    const prices = Array.from({ length: RECENT_PRICES_MAX }, (_, i) => i + 1);
-    const t = priceTick({ ...base, recentPrices: prices }, 99, 2);
-    expect(t.recentPrices).toHaveLength(RECENT_PRICES_MAX);
-    expect(t.recentPrices.at(-1)).toBe(99);
-    expect(t.recentPrices[0]).toBe(2);
+  it("no longer tracks recent prices (the feed sparkline was removed)", () => {
+    expect(priceTick(base, 60, 3).patch).not.toHaveProperty("recentPrices");
   });
 });
 

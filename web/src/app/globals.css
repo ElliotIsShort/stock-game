@@ -204,6 +204,7 @@ tr.me-row { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .margin-banner a { font-weight: 600; text-decoration: underline; }
 .margin-card { border-color: var(--down); }
 .raise-cash h3 { margin: 0; }
+.forgot { margin: -.4rem 0 0; text-align: right; }
 .account-item.margin-item { background: color-mix(in srgb, var(--down) 12%, transparent); }
 #margin { scroll-margin-top: 6.5rem; }
 .trade-move { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; }

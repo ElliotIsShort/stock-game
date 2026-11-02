@@ -44,8 +44,8 @@ npm run test:unit         # pure game logic, ~1s, no Firebase needed
 npm run test:integration  # starts the emulators, runs the suite, shuts them down
 ```
 
-- **Unit** (`shared/test/`): AMM maths against the design doc's worked example, pool sizing and top-ups, starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule, config validation, photo validation, report markdown, ticker validation/defaults, close-countdown schedule, Discord message rendering/mentions/rate limit, awards and badges, standings, price records, alerts.
-- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the close time and per-minute scheduler (due/not due, overlapping ticks, legacy state), config changes, delisting, stock photos, tickers (defaults, uniqueness, cooldown, legacy backfill), Discord posts (captured by a local webhook server: mentions, rate limit + digest, close post, on/off), price alerts and notifications, the recap, awards, price history/records and the full reset.
+- **Unit** (`shared/test/`): AMM maths against the design doc's worked example, pool sizing and top-ups, starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule, config validation, photo validation, report markdown, ticker validation/defaults, close-time maths (advance by whole weeks, legacy derivation, validation), net-worth series coalescing/downsampling, margin thresholds and minimal liquidation, Discord message rendering/mentions/rate limit, awards and badges, standings, price records, alerts.
+- **Integration** (`functions/test/`): calls the real Cloud Functions in the emulators as real signed-in users. Covers registration and approval, security rules (clients can't write cash/prices/pools), buying and selling, fees to the prize pool, posts, reactions, moderation, weekly close (allowance, CEO bonus, prize, pool top-up, idle players, double-close protection), the close time and per-minute scheduler (due/not due, overlapping ticks, legacy state), net-worth points per change (who gets one, coalescing, no trigger loop), margin warnings/calls and forced liquidation (partial and bankrupt), password reset against the Auth emulator, config changes, delisting, stock photos, tickers (defaults, uniqueness, cooldown, legacy backfill), Discord posts (captured by a local webhook server: mentions, rate limit + digest, close post, on/off), price alerts and notifications, the recap, awards, price history/records and the full reset.
 
 Integration tests always use the `demo-fsm` project on `127.0.0.1`, so they can't touch the live Firebase project. They wipe the emulator before each test.
 
@@ -53,15 +53,21 @@ GitHub Actions runs typecheck + both suites on every push and pull request. A pu
 
 ## Deploying
 
-1. Create a Firebase project, enable **Authentication** (Email/Password and Google), **Firestore**, and upgrade to the **Blaze** plan (needed for Cloud Functions). Set a billing budget alert (e.g. £1).
+1. Create a Firebase project, enable **Authentication** (Email/Password and Google), **Firestore**, and upgrade to the **Blaze** plan (needed for Cloud Functions). Set a billing budget alert (see [Costs](#costs)).
 2. `cp .firebaserc.example .firebaserc` and set your project id.
 3. (No cron secret any more: the weekly close runs from the `closeScheduler` function.)
 4. `npm run deploy:backend` runs the tests, then deploys functions, rules and indexes. Region is `europe-west2`; change `REGION` in `functions/src/common.ts` and `NEXT_PUBLIC_FUNCTIONS_REGION` together.
 5. Create `admins/<your uid>` in the Firestore console.
 6. GitHub repo → Settings → Pages → Source: **GitHub Actions**. Add repository **variables** `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`, `NEXT_PUBLIC_FUNCTIONS_REGION`. Push to `main`.
-7. In Firebase Auth → Settings → Authorized domains, add `<user>.github.io`.
+7. In Firebase Auth → Settings → Authorized domains, add the domain the site is served from (`stonker.net`, and/or `<user>.github.io`). Password reset links need it too.
 8. The weekly close is automatic: `closeScheduler` (a Cloud Scheduler job, every minute) closes the week within a minute of `meta/state.closesAt` and moves it on 7 days. Set the time under Admin → Weekly close (it starts as the next Sunday 20:00 UTC). Admins can also close by hand there; closing early leaves the scheduled time alone. The old GitHub Actions cron is gone, so the `WEEKLY_CLOSE_URL` and `CRON_SECRET` repository secrets are no longer needed: delete them (GitHub → Settings → Secrets and variables → Actions), and optionally the `CRON_SECRET` Functions secret (`npx firebase functions:secrets:destroy CRON_SECRET`).
 9. Discord (optional), see below.
+
+### Password reset
+
+Sign-in is Firebase email + password (and Google). "Forgot password?" on the sign-in screen and **Change password** in the account menu both send Firebase's password reset email, using **Firebase's default template and sender** (nothing to configure). The sign-in form always says "If an account exists for that email, a reset link is on its way", so it can't be used to find out who's registered.
+
+For the link to bring people back to the app, `stonker.net` must be listed under Firebase console → **Authentication → Settings → Authorised domains** (if it isn't, the email still goes out, just without the return link). These emails come from a `noreply@<project>.firebaseapp.com` address and may land in spam; tell players to check there.
 
 ### Discord
 
@@ -76,6 +82,26 @@ The market posts to one Discord channel through a webhook. There's no bot to hos
 Tune it under Admin → Config: `discordEnabled`, `discordBigTradePct` (default 0.4 = trades and shorts worth 40% of average net worth), `discordMaxPerHour`.
 
 Locally, `scripts/ensure-test-secret.mjs` points the emulator's `DISCORD_WEBHOOK_URL` at a capture server the integration tests run. Put a real webhook URL in `functions/.secret.local` to see posts in Discord while using `npm run emulators`.
+
+## Costs
+
+The aim is £0 a month. The project is on the Blaze plan (needed for Cloud Functions) but everything is sized to stay inside the free quotas:
+
+| Free quota | Expected use (10–20 players) |
+|---|---|
+| Firestore: 50k reads, 20k writes, 20k deletes per day | `closeScheduler`: ~2,900 reads/day (2 per minute while idle). Each trade: the trade itself plus `onStockTraded` (~10–60 reads, about one write per affected player; see `docs/ARCHITECTURE.md` §5.2). Clients: live listeners on the market collections, plus the net-worth series only on Portfolio and the Player tab. A busy day of 100 trades and a dozen players online is roughly 10–20k reads and 1–2k writes. |
+| Cloud Functions: 2M invocations/month | ~43k/month for `closeScheduler`, ~720 for `discordDigest`, plus a few per trade (`onStockTraded`, `checkPriceAlerts`, `discordDeliver`). |
+| Cloud Scheduler: 3 jobs per billing account | 2 (`discordDigest`, `closeScheduler`). Don't add a third. |
+
+Guardrails in the code: every trigger is scoped to a specific change (a trade's `lastTrade` marker, a price change, a new outbox doc) and never writes the collection it listens to; no polling loops; scheduled functions don't retry; `maxInstances: 5`.
+
+**Set a budget alert.** Firebase has no hard spending cap. In Google Cloud console → Billing → Budgets & alerts, create a budget for the project (e.g. £5) with email alerts at 50%, 90% and 100%.
+
+**Clean up old deploy images.** Each functions deploy leaves a container image in Artifact Registry, the only thing likely to cost a few pence a month. Firebase CLI 14+ can set a cleanup policy (it may also offer to on deploy):
+
+```sh
+npx firebase functions:artifacts:setpolicy --location europe-west2 --days 1
+```
 
 ## Implementation decisions
 

@@ -9,20 +9,33 @@ import {
 } from "firebase/auth";
 import { fb } from "@/lib/firebase";
 import { errorMessage } from "@/lib/api";
+import { RESET_SENT_MESSAGE, sendPasswordReset } from "@/lib/passwordReset";
 
 export function SignIn() {
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<"signin" | "signup" | "reset">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  function switchTo(next: typeof mode) {
+    setMode(next);
+    setError(null);
+    setNotice(null);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      if (mode === "signin") await signInWithEmailAndPassword(fb().auth, email, password);
+      if (mode === "reset") {
+        const res = await sendPasswordReset(email);
+        if (res.ok) setNotice(RESET_SENT_MESSAGE);
+        else setError(res.message);
+      } else if (mode === "signin") await signInWithEmailAndPassword(fb().auth, email, password);
       else await createUserWithEmailAndPassword(fb().auth, email, password);
     } catch (err) {
       setError(errorMessage(err));
@@ -38,6 +51,29 @@ export function SignIn() {
     } catch (err) {
       setError(errorMessage(err));
     }
+  }
+
+  if (mode === "reset") {
+    return (
+      <div className="card narrow">
+        <h1>Reset your password</h1>
+        <p className="muted">Enter the email you sign in with and we&apos;ll send you a link to choose a new password.</p>
+        <form onSubmit={submit} className="stack">
+          <label>
+            Email
+            <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          {error && <p role="alert" className="error">{error}</p>}
+          {notice && <p role="status" className="success">{notice}</p>}
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? "Sending…" : "Send reset link"}
+          </button>
+        </form>
+        <p className="muted small">
+          <button type="button" className="link" onClick={() => switchTo("signin")}>Back to sign in</button>
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -60,6 +96,11 @@ export function SignIn() {
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
+        {mode === "signin" && (
+          <p className="small forgot">
+            <button type="button" className="link" onClick={() => switchTo("reset")}>Forgot password?</button>
+          </p>
+        )}
         {error && <p role="alert" className="error">{error}</p>}
         <button type="submit" className="primary" disabled={busy}>
           {mode === "signin" ? "Sign in" : "Create account"}
@@ -70,7 +111,7 @@ export function SignIn() {
       </button>
       <p className="muted small">
         {mode === "signin" ? "New here? " : "Already have an account? "}
-        <button type="button" className="link" onClick={() => setMode(mode === "signin" ? "signup" : "signin")}>
+        <button type="button" className="link" onClick={() => switchTo(mode === "signin" ? "signup" : "signin")}>
           {mode === "signin" ? "Create an account" : "Sign in"}
         </button>
       </p>

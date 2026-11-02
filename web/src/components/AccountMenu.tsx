@@ -8,6 +8,7 @@ import { gbp, profileHref, stockHref } from "@/lib/format";
 import { setPrefs, usePrefs, type ThemePref } from "@/lib/prefs";
 import { devlogSeenAt, isNewSince, useDevlog } from "@/lib/devlog";
 import { playSound } from "@/lib/sound";
+import { sendPasswordReset } from "@/lib/passwordReset";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
 
@@ -46,6 +47,25 @@ export function AccountMenu() {
 
   // Close on navigation.
   useEffect(() => setOpen(false), [path]);
+
+  // "Change password" sends the reset email to your own address: no re-authentication flow needed.
+  // Only for email/password accounts (Google sign-ins manage their password at Google).
+  const hasPassword = Boolean(g.user?.email && g.user.providerData.some((p) => p.providerId === "password"));
+  const [toast, setToast] = useState<string | null>(null);
+  const [sendingReset, setSendingReset] = useState(false);
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [toast]);
+  async function changePassword() {
+    if (!g.user?.email || sendingReset) return;
+    setOpen(false);
+    setSendingReset(true);
+    const res = await sendPasswordReset(g.user.email);
+    setSendingReset(false);
+    setToast(res.ok ? `We've emailed a link to ${g.user.email} to set a new password. Check your spam folder if it doesn't arrive.` : res.message);
+  }
 
   // Close on outside press.
   useEffect(() => {
@@ -222,6 +242,12 @@ export function AccountMenu() {
         </button>
 
         <div className="account-sep" role="separator" />
+        {hasPassword && (
+          <button type="button" role="menuitem" className="account-item" onClick={changePassword} aria-disabled={sendingReset || undefined}>
+            <span>Change password</span>
+            <span className="muted small">Emails you a link to set a new one</span>
+          </button>
+        )}
         <button
           type="button"
           role="menuitem"
@@ -234,6 +260,12 @@ export function AccountMenu() {
           Sign out
         </button>
       </div>
+      {toast && (
+        <div className="toast" role="status">
+          <span>{toast}</span>
+          <button type="button" className="link" onClick={() => setToast(null)} aria-label="Dismiss">✕</button>
+        </div>
+      )}
     </div>
   );
 }

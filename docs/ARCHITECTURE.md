@@ -387,6 +387,8 @@ Firestore live and writes only through callable functions.
 - `api.ts` — typed `httpsCallable` wrappers for every function + `errorMessage`.
 - `hooks.ts` — `useDoc` / `useQuery` live `onSnapshot` subscriptions.
 - `format.ts` — `gbp`, `pct`, `shares`, `ago`, `changeClass`, `stockHref`.
+- `netWorth.ts` — `useNetWorthPoints(uid, live)`: `netWorthHistory` + the last 8 weeks of `netWorthSeries` + the live value, for the Portfolio and Player-tab charts only.
+- `passwordReset.ts` — `sendPasswordReset(email)` (Firebase `sendPasswordResetEmail`, default template/sender, continue URL back to the site, retried without it if the domain isn't authorised) and `resetResultForError` (unknown/disabled accounts look like success; rate limits get a friendly message). Used by `SignIn` ("Forgot password?") and the account menu ("Change password", email/password accounts only, sends to your own address so no re-auth is needed).
 
 **Context & chrome**
 - `components/GameProvider.tsx` — the data backbone. Tracks auth +
@@ -416,7 +418,9 @@ Firestore live and writes only through callable functions.
   easyui's origin-dropdown): name/email, cash, net worth, week, then My stock,
   Rules, Dev diary (with a dot on the avatar and menu item while the latest
   entry is unread on this device), Preferences (theme Auto/Light/Dark as `menuitemradio`,
-  Sounds as `menuitemcheckbox`), and Sign out. This is where future account
+  Sounds as `menuitemcheckbox`), Change password (emails a reset link; toast
+  confirms), and Sign out. While margin called, a red "Margin call: raise £Y"
+  item at the top links to `/portfolio/#margin`. This is where future account
   options should go. Full menu-button keyboard support (arrows, Home/End, Esc
   returns focus, Tab closes).
 - **Session + moments.** `GameProvider` keeps `touch`'s `recap` and `previousSession` in sessionStorage (a reload's second touch would only see this session). `RecapCard` sits at the top of `<main>` until dismissed. `Moments` shows `ResultsModal` for the latest close if it happened since your previous session and this device hasn't shown it (`fsm:resultsSeen:<uid>`), and fires confetti + a banner when your rank becomes 1 (compared with your last session, then live; it waits 2s after `marketReady` so load-order flicker can't trigger it). `NotificationBell` (top bar) lists your notifications and toasts new ones.
@@ -451,7 +455,8 @@ Firestore live and writes only through callable functions.
 functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
 `Avatar`, `LineChart` / `PriceChart`, `BarChart`, `DonutChart` + `Gauge`,
 `StatCard` + `Sparkline`, `AnimatedNumber`, `SlidePagination`, `AccountMenu`,
-`SimpleMarkdown`, `SignIn`, `Registration`.
+`SimpleMarkdown`, `SignIn` (email/password + Google, "Forgot password?"), `Registration`,
+`MarginPrompt` (`useMyMargin`, `MarginCallBanner`, `RaiseCash`).
 
 **Where the charts are used**
 | Screen | Visual |
@@ -515,6 +520,8 @@ respects `prefers-reduced-motion`.
   only by that uid; `auditLog` is admin-only; `alerts` and `notifications` are
   readable only where `uid == auth.uid`; everything else (incl. `discordOutbox`,
   `discordState`) is denied.
+- Password reset never reveals whether an email is registered (same message
+  either way; `auth/user-not-found` is treated as success).
 - The Discord webhook URL is a Functions secret, validated to be a
   `discord.com/api/webhooks/` URL (or localhost inside the emulator).
 - `firestore.indexes.json`: composite indexes for `trades(stockId+createdAt)`,
@@ -555,7 +562,10 @@ respects `prefers-reduced-motion`.
     & fees, posts/reactions/moderation, shorts + borrow fees, weekly close,
     `setCloseTime` + the scheduler (ticked via `tickScheduler()`, which POSTs
     to the emulator's function route since the emulator has no Cloud
-    Scheduler), admin ops, photos, reset. Always uses the `demo-fsm` project on
+    Scheduler), net-worth series (trigger targeting, coalescing, no loop),
+    margin (warn once, call lifecycle, forced and bankrupt liquidation,
+    report), password reset (imports the web app's `passwordReset.ts` and
+    drives the Auth emulator's reset flow), admin ops, photos, reset. Always uses the `demo-fsm` project on
     `127.0.0.1` and wipes the emulator before each test.
 
 Local dev needs **Node 22+** and **Java 21+** (for the Firestore emulator). See
@@ -606,6 +616,7 @@ full configurable-parameter set (§9).
 | **Moments** | `Moments`, `ResultsModal`, `lib/confetti.ts` | Results screen once per close; confetti + banner for winning the week or taking #1. |
 | **Price alerts + notifications** | `functions/alerts.ts`, `AlertPanel`, `NotificationBell` | In-app (bell + toast) and optional Discord. |
 | **Player profiles** | `PlayerProfile` (Player tab on `/stock`) | Stats, badges, net-worth chart, best/worst calls, weekly results, recent trades, Discord link. |
+| **Password reset** | `lib/passwordReset.ts`, `SignIn`, `AccountMenu` | "Forgot password?" and "Change password" send Firebase's default reset email; neutral wording so registered emails can't be discovered. Needs the site's domain in Firebase Auth's authorised domains for the return link. |
 
 ### 9.3 Deliberate deviations to be aware of
 - **Worked example mismatch:** the design doc's "Buy £500 → £64.00 (+28%)" row

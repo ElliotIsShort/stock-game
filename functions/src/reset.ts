@@ -7,7 +7,7 @@ export const RESET_CONFIRMATION = "RESET";
 
 /** Game data wiped by a reset. Players go first so trades/posts stop being accepted straight away. */
 const WIPED_COLLECTIONS = [
-  "players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "shorts", "weeklyReports",
+  "players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "netWorthSeries", "shorts", "weeklyReports",
   "alerts", "notifications", "discordOutbox", "discordState",
 ] as const;
 

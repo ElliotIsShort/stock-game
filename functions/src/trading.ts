@@ -12,6 +12,7 @@ import {
   type Player,
   type Post,
   type Stock,
+  type StockTradeMark,
   type Trade,
   type TradeSide,
 } from "@fsm/shared";
@@ -117,7 +118,7 @@ export const trade = onCall(async (req) => {
     }
 
     const tick = priceTick(stock, tradeData.priceAfter, state.currentWeek);
-    applyPool(tx, stock, pool.cash, pool.shares, tradeData.priceAfter, tick.patch);
+    applyPool(tx, stock, pool.cash, pool.shares, tradeData.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
 
     // Wallet + holding.
     tx.update(refs.player(uid), { cash: newCash, lastActiveAt: now, isIdle: false });
@@ -169,8 +170,10 @@ export const trade = onCall(async (req) => {
   });
 });
 
-export function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number, extra: Partial<Stock> = {}) {
+/** Apply a trade's pool change. `mark` identifies the trade for the onStockTraded trigger. */
+export function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number, extra: Partial<Stock>, mark: StockTradeMark) {
   tx.update(refs.stock(stock.id), {
+    lastTrade: mark,
     poolCash,
     poolShares,
     k: poolCash * poolShares,

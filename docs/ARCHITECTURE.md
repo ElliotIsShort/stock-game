@@ -56,7 +56,7 @@ write path to game state.
 ## 3. `shared/` — pure game logic (`shared/src/`)
 
 Every module here is side-effect free and unit-tested against the design doc.
-`index.ts` re-exports all of it. Timestamps are epoch-milliseconds (numbers)
+`index.ts` re-exports all of it. (`netWorthSeries.ts`: `pushSeriesPoint` coalescing, `downsampleSeries`, `mergeNetWorthPoints`, `seriesDocId`, `NET_WORTH_SERIES_MAX` = 500, `NET_WORTH_SERIES_WEEKS` = 8.) Timestamps are epoch-milliseconds (numbers)
 everywhere so the same types work on server, client and in stored reports.
 
 | File | Responsibility |
@@ -180,7 +180,7 @@ All documents live at the paths below. IDs and relationships:
 | `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
 | `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `closesAt` (epoch ms the current week closes; admin-set via `setCloseTime`, advanced by whole weeks after each close at/after it; derived once from the old Sunday 20:00 UTC schedule and persisted by `closeScheduler`/`touch` if absent), `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
 | `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session. |
-| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. |
+| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. `lastTrade {by, at, week}` is written by every trade/short/forced sale (`applyPool`) and is what `onStockTraded` keys on. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
 | `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`), optional deprecated `recentPrices` (only on trades from before the feed sparkline was removed; no longer written). |
@@ -191,7 +191,8 @@ All documents live at the paths below. IDs and relationships:
 | `notifications/{id}` | auto | `AppNotification`: `uid`, `kind` ("alert"), `title`, `body`, `stockId`, `createdAt`, `read`. Owner-only reads. |
 | `discordOutbox/{id}` | auto | `DiscordOutboxItem`: `priority` (high/normal), `kind`, `message` (`DiscordMessage` with `{@uid}` tokens), `status` (pending → sent/queued/digested/failed/skipped). Server-only. |
 | `discordState/rate` | fixed | `{ windowStart, sent }`: the hourly routine-post counter. Server-only. |
-| `netWorthHistory/{uid}` | auth uid | `points[]` of `{week, t, v}`, one appended per weekly close, capped to 104. |
+| `netWorthHistory/{uid}` | auth uid | `points[]` of `{week, t, v}`, one appended per weekly close, capped to 104. Kept as-is for older chart ranges. |
+| `netWorthSeries/{uid}_{week}` | uid + week | `NetWorthSeries`: `uid`, `week`, `points[]` of `{t, v}`, `openSince`, `updatedAt`. A point whenever the player's net worth changes (written by `onStockTraded`; the close appends its final value). Coalesced per `netWorthTickMinutes` (the trailing point is overwritten inside the window), capped at 500 by thinning the older half. One doc per week, so closed weeks are never rewritten. Members can read (same as `netWorthHistory`). |
 | `weeklyReports/week-NNNN` | zero-padded week | Full `WeeklyReport` payload + rendered `markdown`. |
 | `registrations/{uid}` | auth uid | `displayName`, `email`, `status` (pending/approved/rejected), `createdAt`, `decidedAt/By` (+ a `displayNameLower` for uniqueness). |
 | `admins/{uid}` | auth uid | Existence = admin. Created manually in the console. |
@@ -237,6 +238,7 @@ the next `updateConfig` drops it.
 | `discordMaxPerHour` | 6 | Routine posts per clock hour; the rest are digested. 0 = digest all routine posts. |
 | `recapAfterHours` | 48 | Hours without activity before `touch` returns a recap. |
 | `maxActiveAlerts` | 10 | Active price alerts per player. |
+| `netWorthTickMinutes` | 5 | Net-worth series: changes within this window overwrite the latest point instead of adding one (0 = a point per change). |
 
 ---
 
@@ -272,6 +274,7 @@ helpers.
 | `createAlert` / `cancelAlert` | alerts.ts | player | Price alerts (`validateAlert`, capped at `maxActiveAlerts`). |
 | `checkPriceAlerts` | alerts.ts | Firestore trigger | On `stocks/{id}` update with a price change: fires due alerts once each (per-alert transaction), writes a notification, optionally queues a high-priority Discord @mention. |
 | `markNotificationsRead` | alerts.ts | player | Marks some or all of your notifications read. |
+| `onStockTraded` | netWorth.ts | Firestore trigger | On `stocks/{id}` update **only when `lastTrade` changed** (every trade, short open/close and forced sale writes `lastTrade {by, at, week}`; weekly-close bookkeeping and ticker edits don't). Loads the affected players (holders of the stock, players short it, the trader) and what their net worth depends on, then records a series point per player in its own transaction. **Never writes `stocks/*`** (it would retrigger itself). See §5.2 for the read budget. |
 | `updateConfig` | adminOps.ts | admin | Validates and merges a config patch; audits before/after. |
 | `delistPlayer` | adminOps.ts | admin | Pays every holder out at the last price, unlists the stock, deactivates the account, system post, audit. |
 | `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. Before `closesAt` it leaves `closesAt` unchanged. |
@@ -300,6 +303,26 @@ and trades can't interleave. Order (design §6):
 8. **Split the entire prize pool** among the winners by the rescaled `prizeSplitPct`, reset to 0 (rolls over if nobody is eligible). Stored as `highlights.winners[]` (`playerId`, `name`, `growth`, `prizeAmount`); `CloseResult` returns the same `winners` plus `prize` (total paid).
 9. **Build and store the WeeklyReport** (money, prices, health, activity, highlights, flags, markdown).
 10. **Writes**: updated players (incl. next week's `netWorthWeekStart`), append a net-worth history point, **reactivate bankrupt players**, reset stock weekly stats, advance `meta/state` to `week + 1` (`prizePool = remaining + borrowFeesCollected`, next `closesAt`), update each short's `borrowFeesPaid`, post a "Week N closed" system message, audit.
+
+### 5.2 Trigger read budget (`onStockTraded`)
+
+Per trade, with H = holders of the traded stock, S = open shorts in the
+market, A = affected players (H ∪ short-sellers of it ∪ the trader), ΣA = their
+holdings, R = other stocks they hold or are short:
+
+```
+reads  = 1 (config) + H + S + A + ΣA + R      load (each query costs ≥ 1)
+       + A                                    series transactions
+writes ≤ A                                    one series doc each
+```
+
+At friend-group scale that's ~25–60 reads per trade in practice (e.g. 15
+players, 3 holdings each, the stock held by 5: 1+5+3+6+18+10+6 ≈ 49). The
+theoretical worst case — 20 players who all hold the traded stock and 5
+stocks each — is ≈ 1+20+5+20+100+19+20 ≈ 185. Each run logs its actual
+`reads`/`writes`, e.g. `onStockTraded {"affected":3,"reads":13,"writes":3}` in
+the emulator output. 100 trades a day ≈ 5k reads — well inside the 50k/day
+free quota. The weekly close appends its point blind (`arrayUnion`, no read).
 
 Report flags (`computeFlags`): `bigMove` (weekly move beyond `flagMovePct`),
 concentration (one holder beyond `flagOwnershipPct`, ignoring dust), and
@@ -389,7 +412,7 @@ functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
 | Screen | Visual |
 |---|---|
 | Top bar | Cash / net worth as `AnimatedNumber` (counts to new values, flashes green/red). |
-| `/portfolio` | `StatCard` row (net worth has a sparkline from `netWorthHistory`); "Where your money is" `DonutChart` (cash + each holding; shorts deliberately excluded); net-worth `LineChart`; per-holding `LineChart` with cost basis. |
+| `/portfolio` | `StatCard` row (net worth has a sparkline from `useNetWorthPoints`: weekly history + per-change series + live); "Where your money is" `DonutChart` (cash + each holding; shorts deliberately excluded); net-worth `LineChart`; per-holding `LineChart` with cost basis. |
 | `/stock` | Price `LineChart`; "Who owns X" `DonutChart` when 2+ players hold it (single holder falls back to a list); `ShortPanel` `Gauge` of short exposure vs. limit, with a lighter preview segment for the short you're typing. |
 | `/reports` | Market index `LineChart` (each close's `prices.index` + a live value = mean(price ÷ listPrice) × 100); "Money flow" grouped `BarChart` of allowances / CEO bonuses / fees for the last 12 weeks, with legend toggles. Both come from the reports already loaded for the list — no extra reads. |
 
@@ -451,7 +474,8 @@ respects `prefers-reduced-motion`.
   `discord.com/api/webhooks/` URL (or localhost inside the emulator).
 - `firestore.indexes.json`: composite indexes for `trades(stockId+createdAt)`,
   `trades(traderId+createdAt)`, `posts(taggedStockId+createdAt)`,
-  `registrations(status+createdAt)`, `shorts(ownerId+status)`.
+  `registrations(status+createdAt)`, `shorts(ownerId+status)`,
+  `netWorthSeries(uid+week desc)` (the charts' "last 8 weeks" query).
 - There are no public HTTPS endpoints: everything is a callable (auth checked)
   or a trigger/scheduled function (v2 scheduled functions are private Cloud
   Run services invoked only by Cloud Scheduler).
@@ -518,7 +542,7 @@ full configurable-parameter set (§9).
 | **Stock photos / avatars** | `shared/photo.ts`, `functions/photo.ts`, `PhotoEditor` | 256px data-URL avatars with server-side magic-byte validation, stored in `photos/{uid}` so price ticks don't resend bytes. |
 | **Admin rename** | `functions/rename.ts` | Renames a player and rewrites denormalised names across all past trades/posts. |
 | **Full reset** | `functions/reset.ts` | Wipe-to-day-one preserving accounts/admins/config/audit; re-queues players as pending. |
-| **Net-worth history + charts** | `netWorthHistory/{uid}`, `LineChart`, `PriceChart` | Weekly per-player samples (capped 104) powering the Portfolio and stock charts. |
+| **Net-worth history + charts** | `netWorthHistory/{uid}`, `netWorthSeries/{uid}_{week}`, `shared/netWorthSeries.ts`, `functions/netWorth.ts`, `lib/netWorth.ts`, `LineChart` | Weekly per-player samples (capped 104) plus a point per net-worth change (coalesced per `netWorthTickMinutes`, ≤500 per week doc). The client merges both (`mergeNetWorthPoints`) and the live value; only `/portfolio` and the Player tab subscribe, to the last 8 weeks. |
 | **Editable Rules** | `shared/content.ts`, `functions/content.ts`, `/rules` | Admin-editable `content/global`, rendered with `SimpleMarkdown`. |
 | **Dev diary** (was the change log) | `devlog/{id}`, `lib/devlog.ts`, `/changelog` (+ `?id=`), Admin → Dev diary | One entry per update (`DevlogEntry`: title, body, date). The page lists entries newest first (with a "New" badge for entries since your last visit, per device) and opens each on its own with older/newer links. Until any entry exists it shows the old `content.changelog` split by `# ` headings. |
 | **Audit log** | `auditLog/{id}`, Admin page | Every admin action records actor/target/details. |

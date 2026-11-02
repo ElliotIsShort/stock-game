@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   discordMaxPerHour: 6,
   recapAfterHours: 48,
   maxActiveAlerts: 10,
+  netWorthTickMinutes: 5,
 };
 
 export interface NumberBound {
@@ -78,6 +79,7 @@ export const CONFIG_BOUNDS: ConfigBounds = {
   discordMaxPerHour: { min: 0, max: 100, integer: true, label: "Discord: max posts per hour", help: "Routine posts beyond this roll into an hourly digest. Closes, listings, bankruptcies and alerts always post" },
   recapAfterHours: { min: 1, max: 8760, label: "Recap after (hours away)", help: "Show the \"while you were away\" recap after this long without activity" },
   maxActiveAlerts: { min: 0, max: 100, integer: true, label: "Max price alerts per player", help: "How many active price alerts one player can have at once" },
+  netWorthTickMinutes: { min: 0, max: 1440, label: "Net-worth chart point interval (minutes)", help: "Changes within this window update the latest chart point instead of adding one; 0 adds a point for every change" },
 };
 
 function listErrors(key: string, value: unknown, bound: ListBound): string[] {

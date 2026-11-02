@@ -71,7 +71,7 @@ export const openShort = onCall(async (req) => {
     }
 
     const tick = priceTick(stock, q.priceAfter, state.currentWeek);
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch);
+    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
     tx.update(refs.player(uid), { cash: player.cash + q.proceeds, lastActiveAt: now, isIdle: false });
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
     if (stateExists) tx.update(refs.state(), nextState);
@@ -132,7 +132,7 @@ export const closeShort = onCall(async (req) => {
     const realisedPnl = short.openProceeds - q.cost - short.borrowFeesPaid;
 
     const tick = priceTick(stock, q.priceAfter, state.currentWeek);
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch);
+    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
     if (stateExists) tx.update(refs.state(), nextState);
     else tx.set(refs.state(), { ...state, ...nextState });

@@ -71,6 +71,14 @@
         { "fieldPath": "stockId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "netWorthSeries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "week", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

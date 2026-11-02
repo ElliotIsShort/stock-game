@@ -41,6 +41,7 @@ import {
 } from "@fsm/shared";
 import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWorld, refs } from "./common";
 import { enqueueDiscord } from "./discord";
+import { seriesRef } from "./netWorth";
 
 export interface CloseOptions {
   /** "admin" = the Admin page button; "schedule" = `closeScheduler` once `closesAt` has passed. */
@@ -423,6 +424,8 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       // Append this week's net-worth sample, keeping the most recent N.
       const points = [...(historyOf.get(p.uid) ?? []), { week, t: now, v: endWorth }].slice(-NET_WORTH_HISTORY_MAX);
       tx.set(refs.netWorthHistory(p.uid), { uid: p.uid, points });
+      // And the closing value as the last fine-grained point of the week (no read: a blind append).
+      tx.set(seriesRef(p.uid, week), { uid: p.uid, week, points: FieldValue.arrayUnion({ t: now, v: endWorth }), openSince: now, updatedAt: now }, { merge: true });
     }
     // Bankrupt players come back at the start of each new week (§bankruptcy).
     // They were deactivated, so they're not in `players`; reactivate directly.

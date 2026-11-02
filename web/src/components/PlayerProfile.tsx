@@ -2,20 +2,20 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
+import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import {
   AWARD_META,
   badgesFor,
   positionFromTrades,
   reportWinners,
-  type NetWorthHistory,
   type Short,
   type Trade,
   type WeeklyReport,
 } from "@fsm/shared";
 import { fb } from "@/lib/firebase";
-import { useDoc, useQuery } from "@/lib/hooks";
+import { useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, signedGbp, stockHref } from "@/lib/format";
+import { useNetWorthPoints } from "@/lib/netWorth";
 import { liveGrowth } from "@/lib/standings";
 import { DiscordLink } from "./DiscordLink";
 import { useGame } from "./GameProvider";
@@ -37,16 +37,11 @@ export function PlayerProfile({ uid }: { uid: string }) {
   const player = playerById.get(uid);
   const isMe = me?.uid === uid;
 
-  const history = useDoc<NetWorthHistory>(doc(db, "netWorthHistory", uid), [uid]);
+  // Weekly close history + the per-change series of recent weeks + the live value.
+  const nwPoints = useNetWorthPoints(uid, player?.netWorth);
   const reports = useQuery<WeeklyReport>(query(collection(db, "weeklyReports"), orderBy("week", "desc")), []);
   const trades = useQuery<Trade>(query(collection(db, "trades"), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)), [uid]);
   const closedShorts = useQuery<Short>(query(collection(db, "shorts"), where("ownerId", "==", uid), where("status", "==", "closed")), [uid]);
-
-  const nwPoints = useMemo(() => {
-    const pts = (history.data?.points ?? []).map((p) => ({ t: p.t, v: p.v }));
-    if (player) pts.push({ t: Date.now(), v: player.netWorth });
-    return pts;
-  }, [history.data, player]);
 
   const badges = useMemo(
     () => badgesFor(uid, reports.data.map((r) => ({ week: r.week, winners: reportWinners(r), awards: r.highlights.awards })), player?.joinWeek ?? 0),
@@ -125,9 +120,9 @@ export function PlayerProfile({ uid }: { uid: string }) {
       <section className="card">
         <h2>Net worth over time</h2>
         {nwPoints.length < 2 ? (
-          <p className="muted small">Charted after the first weekly close.</p>
+          <p className="muted small">Charted once their net worth starts moving.</p>
         ) : (
-          <LineChart points={nwPoints} label={`${player.displayName}'s net worth over time`} ranges={["1M", "3M", "1Y"]} height={200} />
+          <LineChart points={nwPoints} label={`${player.displayName}'s net worth over time`} ranges={["1D", "1W", "1M", "3M", "1Y"]} height={200} />
         )}
       </section>
 

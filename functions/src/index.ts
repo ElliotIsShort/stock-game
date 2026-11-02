@@ -14,3 +14,4 @@ export { openShort, closeShort } from "./shorts";
 export { setTicker } from "./ticker";
 export { discordDeliver, discordDigest, sendDiscordDigest, testDiscord, setDiscordId } from "./discord";
 export { createAlert, cancelAlert, markNotificationsRead, checkPriceAlerts } from "./alerts";
+export { onStockTraded } from "./netWorth";

@@ -14,7 +14,7 @@ Every member of a friend group is a tradable stock. Players trade each other wit
 
 ### Firestore collections
 
-`players/{uid}`, `stocks/{uid}`, `holdings/{uid}_{stockId}`, `trades/{id}`, `posts/{id}`, `photos/{uid}`, `registrations/{uid}`, `weeklyReports/week-NNNN`, `config/global`, `meta/state` (current week, prize pool), `admins/{uid}`, `auditLog/{id}`, `alerts/{id}` and `notifications/{id}` (private to their owner), `discordOutbox/{id}` and `discordState/rate` (server-only).
+`players/{uid}`, `stocks/{uid}`, `holdings/{uid}_{stockId}`, `trades/{id}`, `posts/{id}`, `photos/{uid}`, `netWorthHistory/{uid}` (one point per close) and `netWorthSeries/{uid}_{week}` (a point per net-worth change), `registrations/{uid}`, `weeklyReports/week-NNNN`, `config/global`, `meta/state` (current week, prize pool), `admins/{uid}`, `auditLog/{id}`, `alerts/{id}` and `notifications/{id}` (private to their owner), `discordOutbox/{id}` and `discordState/rate` (server-only).
 
 Stock photos live in `photos/{uid}` as small (256 px, ≤200 KB) JPEG data URLs rather than in Cloud Storage, so there's no extra service to enable. They're kept out of `stocks/{uid}` so live price updates don't resend image data.
 

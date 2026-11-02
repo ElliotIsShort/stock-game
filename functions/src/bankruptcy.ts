@@ -44,7 +44,10 @@ export function applyBankruptcySettlement(
     const price = newCash / newShares;
     // Keep records honest; fire sales don't get their own Discord post.
     const { allTimeHigh, allTimeLow } = priceTick(s, price, week).patch;
-    tx.update(refs.stock(s.id), { poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, allTimeHigh, allTimeLow });
+    tx.update(refs.stock(s.id), {
+      poolShares: newShares, poolCash: newCash, k: newShares * newCash, price, allTimeHigh, allTimeLow,
+      lastTrade: { by: debtor.uid, at: now, week },
+    });
     tx.delete(refs.holding(debtor.uid, sale.stockId));
   }
 

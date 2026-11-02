@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "@fsm/shared";
-import { call, expectCallError, getDoc, listDocs, setupPlayers, signUp, wipeEmulators, type User } from "./helpers";
+import { call, expectCallError, getDoc, listDocs, setupPlayers, signUp, waitFor, wipeEmulators, type User } from "./helpers";
 
 let alice: User; // admin + player
 let bob: User;
@@ -72,13 +72,15 @@ describe("full reset", () => {
     await call(alice, "delistPlayer", { uid: cara.uid });
     const pending = await signUp("Dan");
     await call(pending, "register", { displayName: "Dan" });
+    // The trade's net-worth point (written by a trigger) exists before the reset.
+    await waitFor(() => getDoc(`netWorthSeries/${bob.uid}_1`));
 
     const res = await call(alice, "resetGame", { confirm: "RESET" });
     expect(res.requeued).toBe(2); // Alice + Bob
     expect(res.declined).toBe(1); // Cara was delisted
     expect(res.deleted.players).toBe(3);
 
-    for (const c of ["players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "shorts", "weeklyReports"]) {
+    for (const c of ["players", "stocks", "holdings", "trades", "posts", "photos", "netWorthHistory", "netWorthSeries", "shorts", "weeklyReports"]) {
       expect(await listDocs(c), c).toEqual([]);
     }
     expect(await getDoc("meta/state")).toMatchObject({ currentWeek: 1, prizePool: 0, weekFees: 0, lastCloseAt: null });

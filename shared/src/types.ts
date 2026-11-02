@@ -53,6 +53,8 @@ export interface GameConfig {
   recapAfterHours: number;
   /** Max active price alerts per player. */
   maxActiveAlerts: number;
+  /** Net-worth chart: changes within this many minutes overwrite the latest point instead of adding one. */
+  netWorthTickMinutes: number;
 }
 
 export interface GameState {
@@ -143,6 +145,18 @@ export interface Stock {
   /** Week a new all-time high/low was last announced (at most one each per week). */
   athAnnouncedWeek?: number;
   atlAnnouncedWeek?: number;
+  /**
+   * Who last traded this stock, when, and in which week. Written with every
+   * price-moving trade (and forced sale) so the `onStockTraded` trigger acts
+   * only on trades, never on weekly-close bookkeeping, and knows the trader.
+   */
+  lastTrade?: StockTradeMark;
+}
+
+export interface StockTradeMark {
+  by: string;
+  at: number;
+  week: number;
 }
 
 /** Stored at holdings/{uid}_{stockId}. */
@@ -265,6 +279,27 @@ export interface NetWorthPoint {
 export interface NetWorthHistory {
   uid: string;
   points: NetWorthPoint[];
+}
+
+export interface NetWorthSeriesPoint {
+  /** Epoch ms. */
+  t: number;
+  /** Net worth (cash + holdings − open-short liability). */
+  v: number;
+}
+
+/**
+ * Stored at netWorthSeries/{uid}_{week}: a point whenever the player's net
+ * worth changed during that week (coalesced to one per `netWorthTickMinutes`
+ * window, capped at NET_WORTH_SERIES_MAX). See shared/netWorthSeries.ts.
+ */
+export interface NetWorthSeries {
+  uid: string;
+  week: number;
+  points: NetWorthSeriesPoint[];
+  /** When the trailing point's coalescing window opened. */
+  openSince?: number;
+  updatedAt: number;
 }
 
 /** Stored at photos/{uid}. Kept out of stocks/{uid} so price updates don't resend image data. */

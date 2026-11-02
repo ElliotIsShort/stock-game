@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
-import { positionFromTrades, quoteCloseShort, shortUnrealised, type NetWorthHistory, type Trade } from "@fsm/shared";
+import { collection, limit, orderBy, query, where } from "firebase/firestore";
+import { positionFromTrades, quoteCloseShort, shortUnrealised, type Trade } from "@fsm/shared";
 import { useGame } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { AlertList } from "@/components/AlertPanel";
@@ -11,8 +11,9 @@ import { LineChart } from "@/components/LineChart";
 import { DonutChart } from "@/components/DonutChart";
 import { StatCard } from "@/components/StatCard";
 import { fb } from "@/lib/firebase";
-import { useDoc, useQuery } from "@/lib/hooks";
+import { useQuery } from "@/lib/hooks";
 import { ago, changeClass, gbp, pct, shares, stockHref } from "@/lib/format";
+import { useNetWorthPoints } from "@/lib/netWorth";
 
 export default function PortfolioPage() {
   const { me, playerById, myHoldings, myShorts, myAlerts, stockById, holdings, config } = useGame();
@@ -22,7 +23,8 @@ export default function PortfolioPage() {
     uid ? query(collection(fb().db, "trades"), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)) : null,
     [uid],
   );
-  const history = useDoc<NetWorthHistory>(uid ? doc(fb().db, "netWorthHistory", uid) : null, [uid]);
+  // Weekly close history + the per-change series of recent weeks + the live value.
+  const nwPoints = useNetWorthPoints(uid, uid ? playerById.get(uid)?.netWorth : undefined);
 
   // Group my trades by stock for per-holding cost basis.
   const tradesByStock = useMemo(() => {
@@ -43,12 +45,6 @@ export default function PortfolioPage() {
   const heldByOthers = holdings.filter((h) => h.stockId === me.uid).reduce((a, h) => a + h.shares, 0);
   const weekChange = view && me.netWorthWeekStart > 0 ? view.netWorth / me.netWorthWeekStart - 1 : 0;
 
-  // Net-worth history, with the live value appended as the latest point.
-  const nwPoints = useMemo(() => {
-    const pts = (history.data?.points ?? []).map((p) => ({ t: p.t, v: p.v }));
-    if (view) pts.push({ t: Date.now(), v: view.netWorth });
-    return pts;
-  }, [history.data, view]);
 
   // Total unrealised P/L across all current holdings.
   const totalUnrealised = useMemo(
@@ -80,9 +76,9 @@ export default function PortfolioPage() {
       <section className="card">
         <h2>Net worth over time</h2>
         {nwPoints.length < 2 ? (
-          <p className="muted small">Your net worth is charted after the first weekly close. Check back once a week has closed.</p>
+          <p className="muted small">Your net worth is charted as soon as it moves: make a trade, or wait for someone to trade a stock you hold.</p>
         ) : (
-          <LineChart points={nwPoints} label="Your net worth over time" ranges={["1M", "3M", "1Y"]} />
+          <LineChart points={nwPoints} label="Your net worth over time" ranges={["1D", "1W", "1M", "3M", "1Y"]} />
         )}
       </section>
 

@@ -123,6 +123,19 @@ export async function patchDoc(path: string, fields: Record<string, Json>): Prom
   if (!r.ok) throw new Error(`patch ${path} failed: ${r.status} ${await r.text()}`);
 }
 
+/** Poll until `fn` returns something truthy (Firestore triggers run asynchronously). */
+export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms = 15_000, what = "condition"): Promise<T> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const v = await fn();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`Timed out waiting for ${what}`);
+}
+
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** Remove fields from a doc (e.g. to simulate state from before a field existed), bypassing security rules. */
 export async function clearFields(path: string, keys: string[]): Promise<void> {
   const mask = keys.map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");

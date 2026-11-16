@@ -1,7 +1,7 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import type { Transaction } from "firebase-admin/firestore";
 import { assignTickers, validateTicker, type Player, type Post, type Stock } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, isAdmin, optString, readConfig, readState, refs, requireAuth } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, isAdmin, optString, readConfig, readState, refs, requireAuth } from "./common";
 
 /**
  * Store the effective ticker on every stock that doesn't have one yet (stocks
@@ -20,7 +20,7 @@ export function backfillTickers(tx: Transaction, stocks: Stock[], effective: Map
  * letters, with a cooldown so the feed doesn't fill with changes. Admins may
  * change anyone's (no cooldown, audit-logged).
  */
-export const setTicker = onCall(async (req) => {
+export const setTicker = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const target = optString(data, "uid", 128) ?? uid;

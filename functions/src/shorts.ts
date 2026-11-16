@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import type { Transaction } from "firebase-admin/firestore";
 import {
   ceilPenny,
@@ -13,7 +13,7 @@ import {
   type Short,
   type Stock,
 } from "@fsm/shared";
-import { asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { gameCall, asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
 import { announceTrade } from "./marketEvents";
 import { applyPool } from "./trading";
 
@@ -26,7 +26,7 @@ function shortSummary(s: Pick<Short, "ownerName" | "shares" | "stockName">, acti
  * cash now, and owe a buy-back later. Capped so total open-short value stays
  * within maxShortExposurePct of your capital (cash + holdings value).
  */
-export const openShort = onCall(async (req) => {
+export const openShort = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const stockId = reqString(data, "stockId", 128);
@@ -106,7 +106,7 @@ export const openShort = onCall(async (req) => {
  * fails with `failed-precondition` and `details.shortfall` (the UI offers to
  * sell holdings first). Nothing is settled automatically here any more.
  */
-export const closeShort = onCall(async (req) => {
+export const closeShort = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const shortId = reqString(data, "shortId", 128);

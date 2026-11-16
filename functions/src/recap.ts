@@ -1,4 +1,3 @@
-import { onCall } from "firebase-functions/v2/https";
 import {
   computeStandings,
   mergeConfig,
@@ -16,7 +15,7 @@ import {
   type Trade,
   type WeeklyReport,
 } from "@fsm/shared";
-import { db, ensureClosesAt, refs, requireAuth } from "./common";
+import { gameCall, db, ensureClosesAt, refs, requireAuth } from "./common";
 
 const HOUR_MS = 3_600_000;
 
@@ -27,7 +26,7 @@ const HOUR_MS = 3_600_000;
  * were away" recap. `previous` (the last session's snapshot) lets the client
  * decide on moments: weekly results and "you took #1".
  */
-export const touch = onCall(async (req): Promise<TouchResult> => {
+export const touch = gameCall(async (req): Promise<TouchResult> => {
   const uid = requireAuth(req);
   const now = Date.now();
 

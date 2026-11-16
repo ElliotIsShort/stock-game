@@ -1,6 +1,6 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { advanceClosesAt, type Player } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, initialState, refs, requireAdmin } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, initialState, refs, requireAdmin } from "./common";
 
 /** The admin must send this exact string; the UI makes them type it. */
 export const RESET_CONFIRMATION = "RESET";
@@ -26,7 +26,7 @@ const WIPED_COLLECTIONS = [
  * Not a single transaction (it can touch thousands of docs), so avoid
  * running it while people are actively trading.
  */
-export const resetGame = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (req) => {
+export const resetGame = gameCall({ timeoutSeconds: 540, memory: "512MiB" }, async (req) => {
   const adminId = await requireAdmin(req);
   if (asObject(req.data).confirm !== RESET_CONFIRMATION) {
     throw new HttpsError("invalid-argument", `Type ${RESET_CONFIRMATION} to confirm.`);

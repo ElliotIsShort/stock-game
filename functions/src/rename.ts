@@ -1,6 +1,6 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import type { Player, Registration, Stock } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, refs, reqString, requireAdmin } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, refs, reqString, requireAdmin } from "./common";
 
 /**
  * Admin: rename a player. Updates the player, their stock and registration,
@@ -8,7 +8,7 @@ import { asObject, auditEntry, auditRef, db, refs, reqString, requireAdmin } fro
  * feed is consistent. Friend-group scale (tens/hundreds of docs), so a batched
  * rewrite is fine.
  */
-export const renamePlayer = onCall({ timeoutSeconds: 120 }, async (req) => {
+export const renamePlayer = gameCall({ timeoutSeconds: 120 }, async (req) => {
   const adminId = await requireAdmin(req);
   const data = asObject(req.data);
   const uid = reqString(data, "uid", 128);

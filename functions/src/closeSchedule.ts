@@ -1,8 +1,8 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
 import { closeTimeError, closeTimeMessage, effectiveClosesAt, formatCloseTime, type Post } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, ensureClosesAt, readState, refs, requireAdmin } from "./common";
+import { inMaintenance, gameCall, asObject, auditEntry, auditRef, db, ensureClosesAt, readState, refs, requireAdmin } from "./common";
 import { enqueueDiscord } from "./discord";
 import { liquidateDueMarginCalls, type LiquidationResult } from "./margin";
 import { closeWeek, type CloseResult } from "./weeklyClose";
@@ -12,7 +12,7 @@ import { closeWeek, type CloseResult } from "./weeklyClose";
  * five minutes ahead), audited before/after and announced in the feed and on
  * Discord. Scheduled closes then move it on by whole weeks.
  */
-export const setCloseTime = onCall(async (req) => {
+export const setCloseTime = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const closesAt = asObject(req.data).closesAt;
   const now = Date.now();
@@ -85,6 +85,7 @@ export async function runScheduler(now: number): Promise<SchedulerRun> {
  * ≈2,880 reads a day. No retries: the next tick is a minute away anyway.
  */
 export const closeScheduler = onSchedule({ schedule: "every 1 minutes", timeoutSeconds: 300, retryCount: 0 }, async () => {
+  if (await inMaintenance()) return;
   try {
     await runScheduler(Date.now());
   } catch (err) {

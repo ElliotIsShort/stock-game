@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
@@ -20,7 +20,7 @@ import {
   type MentionTarget,
   type Player,
 } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, refs, requireAdmin, requireAuth } from "./common";
+import { gameCall, inMaintenance, asObject, auditEntry, auditRef, db, refs, requireAdmin, requireAuth } from "./common";
 
 /**
  * Discord, webhook-only: no bot process. Game code writes messages to
@@ -117,6 +117,7 @@ export const discordDeliver = onDocumentCreated(
     if (!snap) return;
     const item = snap.data() as DiscordOutboxItem;
     if (item.status !== "pending") return;
+    if (await inMaintenance()) return;
     const cfg = mergeConfig((await refs.config().get()).data());
     const url = webhookUrl();
     if (!url || cfg.discordEnabled !== 1) {
@@ -167,18 +168,19 @@ export async function flushDigest(): Promise<{ sent: number; skipped?: string }>
 }
 
 export const discordDigest = onSchedule({ schedule: "every 60 minutes", secrets: [DISCORD_WEBHOOK_URL] }, async () => {
+  if (await inMaintenance()) return;
   const res = await flushDigest();
   if (res.sent) logger.info("Discord digest sent", res);
 });
 
 /** Admin: post the digest now instead of waiting for the hourly run. */
-export const sendDiscordDigest = onCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
+export const sendDiscordDigest = gameCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
   await requireAdmin(req);
   return flushDigest();
 });
 
 /** Admin: post a test message straight to the webhook and report what Discord said. */
-export const testDiscord = onCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
+export const testDiscord = gameCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
   const adminId = await requireAdmin(req);
   const url = webhookUrl();
   if (!url) return { ok: false, error: "DISCORD_WEBHOOK_URL isn't set, or isn't a Discord webhook URL." };
@@ -188,7 +190,7 @@ export const testDiscord = onCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req
 });
 
 /** Link (or unlink with null) your Discord user ID so posts can @mention you. */
-export const setDiscordId = onCall(async (req) => {
+export const setDiscordId = gameCall(async (req) => {
   const uid = requireAuth(req);
   const raw = asObject(req.data).discordId;
   let discordId: string | null = null;

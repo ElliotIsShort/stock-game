@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import {
   DEFAULT_CHANGELOG,
   MAX_CONTENT_LENGTH,
@@ -7,10 +7,10 @@ import {
   type DevlogEntry,
   type SiteContent,
 } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, optString, refs, reqString, requireAdmin } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, optString, refs, reqString, requireAdmin } from "./common";
 
 /** Admin: edit the Rules and/or Change log shown to players. */
-export const updateContent = onCall(async (req) => {
+export const updateContent = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const data = asObject(req.data);
   const patch: Partial<Pick<SiteContent, "rules" | "changelog">> = {};
@@ -34,7 +34,7 @@ export const updateContent = onCall(async (req) => {
 const devlog = () => db.collection("devlog");
 
 /** Admin: create a dev diary entry, or edit one by passing its `id`. */
-export const saveDevlogEntry = onCall(async (req) => {
+export const saveDevlogEntry = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const data = asObject(req.data);
   const check = validateDevlogEntry(data.title, data.body, data.date);
@@ -56,7 +56,7 @@ export const saveDevlogEntry = onCall(async (req) => {
   });
 });
 
-export const deleteDevlogEntry = onCall(async (req) => {
+export const deleteDevlogEntry = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const id = reqString(asObject(req.data), "id", 128);
   const now = Date.now();
@@ -77,7 +77,7 @@ export const deleteDevlogEntry = onCall(async (req) => {
  * built-in history (which has dates); entries whose title already exists are
  * skipped, so it's safe to press twice.
  */
-export const importDevlog = onCall(async (req) => {
+export const importDevlog = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const now = Date.now();
   const legacy = splitLegacyChangelog(DEFAULT_CHANGELOG);

@@ -3,7 +3,7 @@
 export { register, approvePlayer, rejectPlayer } from "./approval";
 export { trade } from "./trading";
 export { createPost, toggleReaction, deletePost } from "./social";
-export { updateConfig, delistPlayer, runWeeklyClose } from "./adminOps";
+export { updateConfig, delistPlayer, runWeeklyClose, setMaintenance } from "./adminOps";
 export { setCloseTime, closeScheduler } from "./closeSchedule";
 export { touch } from "./recap";
 export { setStockPhoto } from "./photo";

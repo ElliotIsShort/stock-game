@@ -1,10 +1,10 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { mergeConfig, validateConfigPatch, type Holding, type Player, type Post, type Stock } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin } from "./common";
 import { closeWeek } from "./weeklyClose";
 
 /** Admin: edit config/global. Unknown keys and out-of-range values are rejected. */
-export const updateConfig = onCall(async (req) => {
+export const updateConfig = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const patch = asObject(asObject(req.data).patch);
   const errors = validateConfigPatch(patch);
@@ -27,7 +27,7 @@ export const updateConfig = onCall(async (req) => {
  * Admin: delist a player who wants out (§5). Holders are paid out at the
  * last price, the stock is removed from trading, and the account is deactivated.
  */
-export const delistPlayer = onCall(async (req) => {
+export const delistPlayer = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const uid = reqString(asObject(req.data), "uid", 128);
   const now = Date.now();
@@ -84,8 +84,23 @@ export const delistPlayer = onCall(async (req) => {
  * Admin button: close the week now. Closing before `closesAt` leaves the
  * scheduled time as it is (edit it with setCloseTime if needed).
  */
-export const runWeeklyClose = onCall({ timeoutSeconds: 300 }, async (req) => {
+export const runWeeklyClose = gameCall({ timeoutSeconds: 300 }, async (req) => {
   const adminId = await requireAdmin(req);
   const expectedWeek = reqNumber(asObject(req.data), "expectedWeek");
   return closeWeek({ trigger: "admin", actorId: adminId, expectedWeek });
+});
+
+/**
+ * Admin: the global kill switch. While on, every mutating callable, trigger
+ * and scheduler tick refuses/skips (see `gameCall`). Deliberately plain
+ * `onCall` so the admin can always turn it off again.
+ */
+export const setMaintenance = onCall(async (req) => {
+  const adminId = await requireAdmin(req);
+  const enabled = asObject(req.data).enabled;
+  if (typeof enabled !== "boolean") throw new HttpsError("invalid-argument", "enabled must be true or false.");
+  const now = Date.now();
+  await db.doc("system/maintenance").set({ enabled, updatedAt: now, updatedBy: adminId });
+  await auditRef().set(auditEntry(adminId, "setMaintenance", null, { enabled }, now));
+  return { enabled };
 });

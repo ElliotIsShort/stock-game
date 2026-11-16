@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import {
@@ -11,14 +11,14 @@ import {
   type PriceAlert,
   type Stock,
 } from "@fsm/shared";
-import { asObject, db, readConfig, refs, reqNumber, reqString, requireAuth } from "./common";
+import { gameCall, inMaintenance, asObject, db, readConfig, refs, reqNumber, reqString, requireAuth } from "./common";
 import { enqueueDiscord } from "./discord";
 import { tickerFor } from "./marketEvents";
 
 const alertRef = (id: string) => db.doc(`alerts/${id}`);
 
 /** "Tell me when James drops below £50." Delivered in-app, and on Discord if asked. */
-export const createAlert = onCall(async (req) => {
+export const createAlert = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const stockId = reqString(data, "stockId", 128);
@@ -60,7 +60,7 @@ export const createAlert = onCall(async (req) => {
   });
 });
 
-export const cancelAlert = onCall(async (req) => {
+export const cancelAlert = gameCall(async (req) => {
   const uid = requireAuth(req);
   const id = reqString(asObject(req.data), "alertId", 128);
   await db.runTransaction(async (tx) => {
@@ -73,7 +73,7 @@ export const cancelAlert = onCall(async (req) => {
 });
 
 /** Mark some (or, with no ids, all) of your notifications read. */
-export const markNotificationsRead = onCall(async (req) => {
+export const markNotificationsRead = gameCall(async (req) => {
   const uid = requireAuth(req);
   const ids = asObject(req.data).ids;
   if (ids !== undefined && (!Array.isArray(ids) || ids.length > 100 || !ids.every((i) => typeof i === "string" && i.length <= 128))) {
@@ -100,6 +100,7 @@ export const checkPriceAlerts = onDocumentUpdated({ document: "stocks/{id}", ret
   const before = event.data?.before.data() as Stock | undefined;
   const after = event.data?.after.data() as Stock | undefined;
   if (!before || !after || before.price === after.price) return;
+  if (await inMaintenance()) return;
   const snap = await db.collection("alerts").where("stockId", "==", after.id).where("status", "==", "active").get();
   const due = snap.docs.map((d) => d.data() as PriceAlert).filter((a) => alertFires(a, after.price));
   for (const a of due) {

@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import type { Transaction } from "firebase-admin/firestore";
 import {
   CASH_EPSILON,
@@ -16,7 +16,7 @@ import {
   type Trade,
   type TradeSide,
 } from "@fsm/shared";
-import { asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { gameCall, asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
 import { announceTrade, withHoldingStats } from "./marketEvents";
 
 export function tradeSummary(t: Pick<Trade, "traderName" | "side" | "shares" | "stockName" | "cashAmount">): string {
@@ -31,7 +31,7 @@ export function tradeSummary(t: Pick<Trade, "traderName" | "side" | "shares" | "
  *   sell: amount = shares to sell
  * Optional postText creates a post linked to this trade (§7).
  */
-export const trade = onCall(async (req) => {
+export const trade = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const stockId = reqString(data, "stockId", 128);

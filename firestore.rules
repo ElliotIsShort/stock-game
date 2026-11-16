@@ -35,6 +35,8 @@ service cloud.firestore {
     match /config/{id}         { allow read: if signedIn(); allow write: if false; }
     match /content/{id}        { allow read: if signedIn(); allow write: if false; }
     match /devlog/{id}         { allow read: if signedIn(); allow write: if false; }
+    // Global maintenance switch: everyone signed in reads it (for the banner).
+    match /system/{id}         { allow read: if signedIn(); allow write: if false; }
 
     // Private to their owner: your price alerts and in-app notifications.
     match /alerts/{id} {

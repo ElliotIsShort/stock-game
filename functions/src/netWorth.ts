@@ -13,7 +13,7 @@ import {
   type Short,
   type Stock,
 } from "@fsm/shared";
-import { db, refs } from "./common";
+import { db, inMaintenance, refs } from "./common";
 import { reevaluateMargin } from "./margin";
 
 export const seriesRef = (uid: string, week: number) => db.doc(`netWorthSeries/${seriesDocId(uid, week)}`) as DocumentReference<NetWorthSeries>;
@@ -113,6 +113,7 @@ export const onStockTraded = onDocumentUpdated({ document: "stocks/{id}", retry:
   const mark = after?.lastTrade;
   if (!before || !after || !mark) return;
   if (before.lastTrade && before.lastTrade.at === mark.at && before.lastTrade.by === mark.by) return;
+  if (await inMaintenance()) return;
 
   const world = await loadAffected(after, mark.by);
   // Taken after the reads, so a later point never carries older data.

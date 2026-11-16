@@ -28,6 +28,7 @@ export const api = {
   setStockPhoto: (photo: string | null, uid?: string) =>
     call<{ photo: string | null; uid?: string }, { ok: true; hasPhoto: boolean }>("setStockPhoto", uid ? { photo, uid } : { photo }),
   // Admin
+  setMaintenance: (enabled: boolean) => call<{ enabled: boolean }, { enabled: boolean }>("setMaintenance", { enabled }),
   approvePlayer: (uid: string) => call<{ uid: string }, { startingCash: number; listingPrice: number }>("approvePlayer", { uid }),
   rejectPlayer: (uid: string) => call("rejectPlayer", { uid }),
   deletePost: (postId: string, reason?: string) => call("deletePost", { postId, reason }),

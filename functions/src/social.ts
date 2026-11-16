@@ -1,13 +1,13 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { REACTION_TYPES, type Player, type Post, type ReactionType, type Stock, type Trade } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, optString, readConfig, readState, refs, reqString, requireAdmin, requireAuth } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, optString, readConfig, readState, refs, reqString, requireAdmin, requireAuth } from "./common";
 import { tradeSummary } from "./trading";
 
 /**
  * Create a post. Standalone, tagged to a person (including yourself), and/or
  * linked to one of your own trades. Posts never affect price.
  */
-export const createPost = onCall(async (req) => {
+export const createPost = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const text = reqString(data, "text", 5000);
@@ -76,7 +76,7 @@ export const createPost = onCall(async (req) => {
 });
 
 /** Toggle a reaction. Purely social — never touches prices. */
-export const toggleReaction = onCall(async (req) => {
+export const toggleReaction = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const postId = reqString(data, "postId", 128);
@@ -102,7 +102,7 @@ export const toggleReaction = onCall(async (req) => {
 });
 
 /** Admin moderation: delete a post. The deleted text is kept in the audit log. */
-export const deletePost = onCall(async (req) => {
+export const deletePost = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const data = asObject(req.data);
   const postId = reqString(data, "postId", 128);

@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import {
   assignTickers,
   defaultTicker,
@@ -18,6 +18,7 @@ import {
   auditEntry,
   auditRef,
   db,
+  gameCall,
   holdingsByUid,
   readConfig,
   readState,
@@ -30,7 +31,7 @@ import { backfillTickers } from "./ticker";
 import { enqueueDiscord } from "./discord";
 
 /** §4.3 step 1: a signed-in user asks to join. No funds until an admin approves. */
-export const register = onCall(async (req) => {
+export const register = gameCall(async (req) => {
   if (!req.auth) throw new HttpsError("unauthenticated", "Sign in first.");
   const uid = req.auth.uid;
   const displayName = reqString(asObject(req.data), "displayName", 30).replace(/\s+/g, " ");
@@ -66,7 +67,7 @@ export const register = onCall(async (req) => {
  * §4.3: atomically create the player (with startingCash) and their listed
  * stock with a pool sized per §2.1.
  */
-export const approvePlayer = onCall(async (req) => {
+export const approvePlayer = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const uid = reqString(asObject(req.data), "uid", 128);
   const now = Date.now();
@@ -169,7 +170,7 @@ export const approvePlayer = onCall(async (req) => {
   });
 });
 
-export const rejectPlayer = onCall(async (req) => {
+export const rejectPlayer = gameCall(async (req) => {
   const adminId = await requireAdmin(req);
   const uid = reqString(asObject(req.data), "uid", 128);
   const now = Date.now();

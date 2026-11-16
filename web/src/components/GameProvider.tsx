@@ -77,6 +77,8 @@ interface GameContextValue {
   notifications: AppNotification[];
   /** Your active price alerts. */
   myAlerts: PriceAlert[];
+  /** Admin kill switch is on: every mutation is refused (the game is being upgraded). */
+  maintenance: boolean;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -127,6 +129,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const loadingMembership = registration.loading || adminDoc.loading || meDoc.loading;
   const liveDb = db && isMember ? db : null;
   const on = Boolean(liveDb);
+
+  const maintenanceDoc = useDoc<{ enabled?: boolean }>(db && uid ? doc(db, "system", "maintenance") : null, [uid]);
 
   const stocksQ = useQuery<Stock>(liveDb ? collection(liveDb, "stocks") : null, [on]);
   const playersQ = useQuery<Player>(liveDb ? collection(liveDb, "players") : null, [on]);
@@ -236,8 +240,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       sessionKnown,
       notifications: notificationsQ.data,
       myAlerts: alertsQ.data,
+      maintenance: maintenanceDoc.data?.enabled === true,
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data, marketReady, recap, dismissRecap, previousSession, sessionKnown, notificationsQ.data, alertsQ.data]);
+  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data, marketReady, recap, dismissRecap, previousSession, sessionKnown, notificationsQ.data, alertsQ.data, maintenanceDoc.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

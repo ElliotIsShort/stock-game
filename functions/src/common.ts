@@ -1,7 +1,7 @@
 import { initializeApp } from "firebase-admin/app";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { getFirestore, type DocumentReference, type Transaction } from "firebase-admin/firestore";
-import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
+import { HttpsError, onCall, type CallableOptions, type CallableRequest } from "firebase-functions/v2/https";
 import { effectiveClosesAt, legacyClosesAt, mergeConfig, type GameConfig, type GameState, type Holding, type NetWorthHistory, type Player, type Short, type Stock } from "@fsm/shared";
 
 /** Change to the region closest to your players (also update web/.env). */
@@ -57,6 +57,37 @@ export async function readConfig(tx: Transaction): Promise<GameConfig> {
 export async function readState(tx: Transaction, now: number): Promise<{ state: GameState; exists: boolean }> {
   const snap = await tx.get(refs.state());
   return snap.exists ? { state: snap.data()!, exists: true } : { state: initialState(now), exists: false };
+}
+
+// ---------- Maintenance mode (global kill switch) ----------
+
+/** `system/maintenance` { enabled }. Absent or enabled:false = the game is open. */
+export const MAINTENANCE_MESSAGE = "The game is being upgraded, back shortly.";
+
+export async function inMaintenance(): Promise<boolean> {
+  const snap = await db.doc("system/maintenance").get();
+  return snap.exists && snap.data()?.enabled === true;
+}
+
+export async function assertNotMaintenance(): Promise<void> {
+  if (await inMaintenance()) throw new HttpsError("unavailable", MAINTENANCE_MESSAGE);
+}
+
+type CallHandler<T, R> = (req: CallableRequest<T>) => Promise<R> | R;
+
+/**
+ * `onCall` for every function that can change data: rejects signed-in calls
+ * while maintenance mode is on (one read). Unauthenticated calls fall through
+ * so the handler's own "Sign in first" error still wins. Only `setMaintenance`
+ * (the switch itself) uses plain `onCall`.
+ */
+export function gameCall<T = any, R = any>(a: CallableOptions<T> | CallHandler<T, R>, b?: CallHandler<T, R>) {
+  const opts: CallableOptions<T> = typeof a === "function" ? {} : a;
+  const handler = (typeof a === "function" ? a : b)!;
+  return onCall<T, Promise<R>>(opts, async (req) => {
+    if (req.auth) await assertNotMaintenance();
+    return handler(req);
+  });
 }
 
 export function requireAuth(req: CallableRequest): string {

@@ -49,6 +49,7 @@ export default function AdminPage() {
           View as player
         </button>
       </div>
+      <Maintenance />
       <Approvals />
       <Players />
       <WeeklyClose />
@@ -60,6 +61,37 @@ export default function AdminPage() {
       <AuditLog />
       <ResetGame />
     </div>
+  );
+}
+
+/** Global kill switch used while upgrading or migrating: every mutation is refused and the UI shows a banner. */
+function Maintenance() {
+  const { maintenance } = useGame();
+  const { busy, run, view } = useAction();
+  return (
+    <section className={maintenance ? "card stack danger-zone" : "card stack"}>
+      <h2>Maintenance mode</h2>
+      <p className="muted">
+        {maintenance
+          ? "ON: trading, posting and every other change is refused, and players see a banner."
+          : "Off. Turn it on before an upgrade or data migration so nothing is written in the meantime."}
+      </p>
+      <div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              await api.setMaintenance(!maintenance);
+              return maintenance ? "Maintenance mode is off." : "Maintenance mode is on.";
+            })
+          }
+        >
+          {maintenance ? "Turn off" : "Turn on"}
+        </button>
+      </div>
+      {view}
+    </section>
   );
 }
 

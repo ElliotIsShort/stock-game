@@ -61,6 +61,10 @@ export function Shell({ children }: { children: ReactNode }) {
     );
   }
 
+  const maintenanceBanner = g.maintenance && (
+    <div className="banner" role="status">The game is being upgraded, back shortly. Trading and posting are paused.</div>
+  );
+
   const nav = g.isAdmin ? [...NAV, ADMIN_NAV] : NAV;
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
   const current = (href: string) => (path === href || path === href.replace(/\/$/, "") ? "page" : undefined);
@@ -93,6 +97,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </header>
         <MarketStrip />
       </div>
+      {maintenanceBanner}
       {previewBanner}
       {g.me && !g.me.isActive && <div className="banner">Your stock has been delisted. You can browse but not trade.</div>}
       <main className="page">

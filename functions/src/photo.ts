@@ -1,13 +1,13 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { HttpsError } from "firebase-functions/v2/https";
 import { parsePhotoDataUrl, type Player, type StockPhoto } from "@fsm/shared";
-import { asObject, auditEntry, auditRef, db, isAdmin, optString, refs, requireAuth } from "./common";
+import { gameCall, asObject, auditEntry, auditRef, db, isAdmin, optString, refs, requireAuth } from "./common";
 
 /**
  * Set or remove your own stock's photo. Pass `photo: null` to remove.
  * Admins may also remove (never set) someone else's photo, as a moderation
  * safety valve; that is audit-logged.
  */
-export const setStockPhoto = onCall(async (req) => {
+export const setStockPhoto = gameCall(async (req) => {
   const uid = requireAuth(req);
   const data = asObject(req.data);
   const target = optString(data, "uid", 128) ?? uid;

@@ -225,9 +225,9 @@ function ReactionButton({
         onReact();
       }}
     >
-      <span key={bounce} className={bounce ? "reaction-emoji bounce" : "reaction-emoji"}>{REACTION_EMOJI[type]}</span>
+      <span key={`emoji-${bounce}`} className={bounce ? "reaction-emoji bounce" : "reaction-emoji"}>{REACTION_EMOJI[type]}</span>
       {count > 0 && (
-        <span key={count} className={`reaction-count${dir ? ` roll-${dir}` : ""}`}>{count}</span>
+        <span key={`count-${count}`} className={`reaction-count${dir ? ` roll-${dir}` : ""}`}>{count}</span>
       )}
     </button>
   );

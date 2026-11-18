@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useMemo, useState } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { formatCloseTime, positionFromTrades, quoteCloseShort, shortUnrealised, touchesHolding, type Trade } from "@fsm/shared";
-import { useGame } from "@/components/GameProvider";
+import { useGame, usePaths } from "@/components/GameProvider";
 import { PhotoEditor } from "@/components/PhotoEditor";
 import { AlertList } from "@/components/AlertPanel";
 import { LineChart } from "@/components/LineChart";
@@ -19,9 +19,10 @@ import { MarginCallBanner, RaiseCash, useMyMargin } from "@/components/MarginPro
 export default function PortfolioPage() {
   const { me, playerById, myHoldings, myShorts, myAlerts, stockById, holdings, config } = useGame();
   const uid = me?.uid ?? null;
+  const paths = usePaths();
   // All of my trades, oldest-first cost basis needs the full history (not just recent).
   const myTrades = useQuery<Trade>(
-    uid ? query(collection(fb().db, "trades"), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)) : null,
+    uid ? query(collection(fb().db, paths.trades), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)) : null,
     [uid],
   );
   // Weekly close history + the per-change series of recent weeks + the live value.

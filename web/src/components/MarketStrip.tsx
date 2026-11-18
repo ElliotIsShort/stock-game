@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { formatCountdown, nextScheduledClose, type Stock } from "@fsm/shared";
 import { changeClass, gbp, pct, stockHref } from "@/lib/format";

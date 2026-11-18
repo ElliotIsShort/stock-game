@@ -15,7 +15,7 @@ import {
   type Trade,
   type WeeklyReport,
 } from "@fsm/shared";
-import { gameCall, db, ensureClosesAt, refs, requireAuth } from "./common";
+import { gameCall, gameCtx, ensureClosesAt, type Refs } from "./common";
 
 const HOUR_MS = 3_600_000;
 
@@ -27,22 +27,22 @@ const HOUR_MS = 3_600_000;
  * decide on moments: weekly results and "you took #1".
  */
 export const touch = gameCall(async (req): Promise<TouchResult> => {
-  const uid = requireAuth(req);
+  const { uid, R } = await gameCtx(req);
   const now = Date.now();
 
-  const meSnap = await refs.player(uid).get();
+  const meSnap = await R.player(uid).get();
   if (!meSnap.exists) return { player: false, reactivated: false, previous: null, recap: null };
   const me = meSnap.data() as Player;
   if (!me.isActive) return { player: true, reactivated: false, previous: me.seenSnapshot ?? null, recap: null };
 
   // Friend-group scale: reading everything once per session is cheap.
   const [playersSnap, stocksSnap, holdingsSnap, shortsSnap, configSnap, stateSnap] = await Promise.all([
-    db.collection("players").get(),
-    db.collection("stocks").get(),
-    db.collection("holdings").get(),
-    db.collection("shorts").where("status", "==", "open").get(),
-    refs.config().get(),
-    refs.state().get(),
+    R.col("players").get(),
+    R.col("stocks").get(),
+    R.col("holdings").get(),
+    R.col("shorts").where("status", "==", "open").get(),
+    R.config().get(),
+    R.state().get(),
   ]);
   const cfg = mergeConfig(configSnap.data());
   const state = stateSnap.data() as GameState | undefined;
@@ -56,16 +56,17 @@ export const touch = gameCall(async (req): Promise<TouchResult> => {
   const snapshot: SeenSnapshot = { at: now, netWorth: mine.netWorth, rank: mine.rank, week };
 
   // Migration for state from before closesAt (the client shows the same derived value meanwhile).
-  if (state && typeof state.closesAt !== "number") await ensureClosesAt(now);
+  if (state && typeof state.closesAt !== "number") await ensureClosesAt(R, now);
 
   const since = me.lastActiveAt;
-  const recap = now - since >= cfg.recapAfterHours * HOUR_MS ? await buildRecap(uid, since, previous, mine, week, stocks) : null;
+  const recap = now - since >= cfg.recapAfterHours * HOUR_MS ? await buildRecap(R, uid, since, previous, mine, week, stocks) : null;
 
-  await refs.player(uid).update({ lastActiveAt: now, isIdle: false, seenSnapshot: snapshot });
+  await R.player(uid).update({ lastActiveAt: now, isIdle: false, seenSnapshot: snapshot });
   return { player: true, reactivated: me.isIdle, previous, recap };
 });
 
 async function buildRecap(
+  R: Refs,
   uid: string,
   since: number,
   previous: SeenSnapshot | null,
@@ -74,9 +75,9 @@ async function buildRecap(
   stocks: Stock[],
 ): Promise<Recap> {
   const [tradesSnap, reportsSnap, alertsSnap] = await Promise.all([
-    db.collection("trades").where("stockId", "==", uid).where("createdAt", ">", since).orderBy("createdAt", "desc").limit(200).get(),
-    db.collection("weeklyReports").where("periodEnd", ">", since).get(),
-    db.collection("alerts").where("uid", "==", uid).where("status", "==", "triggered").get(),
+    R.col("trades").where("stockId", "==", uid).where("createdAt", ">", since).orderBy("createdAt", "desc").limit(200).get(),
+    R.col("weeklyReports").where("periodEnd", ">", since).get(),
+    R.col("alerts").where("uid", "==", uid).where("status", "==", "triggered").get(),
   ]);
   const trades = tradesSnap.docs.map((d) => d.data() as Trade).filter((t) => t.traderId !== uid);
   const reports = reportsSnap.docs.map((d) => d.data() as WeeklyReport).sort((a, b) => a.week - b.week);

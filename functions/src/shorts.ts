@@ -13,7 +13,7 @@ import {
   type Short,
   type Stock,
 } from "@fsm/shared";
-import { gameCall, asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { gameCall, gameCtx, db, optString, readConfig, readState, reqNumber, reqString, type Refs } from "./common";
 import { announceTrade } from "./marketEvents";
 import { applyPool } from "./trading";
 
@@ -27,8 +27,7 @@ function shortSummary(s: Pick<Short, "ownerName" | "shares" | "stockName">, acti
  * within maxShortExposurePct of your capital (cash + holdings value).
  */
 export const openShort = gameCall(async (req) => {
-  const uid = requireAuth(req);
-  const data = asObject(req.data);
+  const { uid, R, data } = await gameCtx(req);
   const stockId = reqString(data, "stockId", 128);
   const shares = reqNumber(data, "shares");
   const postText = optString(data, "postText", 5000);
@@ -37,14 +36,14 @@ export const openShort = gameCall(async (req) => {
   const now = Date.now();
 
   return db.runTransaction(async (tx) => {
-    const cfg = await readConfig(tx);
-    const { state, exists: stateExists } = await readState(tx, now);
+    const cfg = await readConfig(tx, R);
+    const { state, exists: stateExists } = await readState(tx, R, now);
     const [playerSnap, stockSnap, openShortsSnap, holdingsSnap, stocksSnap] = await Promise.all([
-      tx.get(refs.player(uid)),
-      tx.get(refs.stock(stockId)),
-      tx.get(db.collection("shorts").where("ownerId", "==", uid).where("status", "==", "open")),
-      tx.get(db.collection("holdings").where("uid", "==", uid)),
-      tx.get(db.collection("stocks")),
+      tx.get(R.player(uid)),
+      tx.get(R.stock(stockId)),
+      tx.get(R.col("shorts").where("ownerId", "==", uid).where("status", "==", "open")),
+      tx.get(R.col("holdings").where("uid", "==", uid)),
+      tx.get(R.col("stocks")),
     ]);
     if (!playerSnap.exists) throw new HttpsError("permission-denied", "You're not an approved player.");
     const player = playerSnap.data() as Player;
@@ -71,13 +70,13 @@ export const openShort = gameCall(async (req) => {
     }
 
     const tick = priceTick(stock, q.priceAfter, state.currentWeek);
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
-    tx.update(refs.player(uid), { cash: player.cash + q.proceeds, lastActiveAt: now, isIdle: false });
+    applyPool(tx, R, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
+    tx.update(R.player(uid), { cash: player.cash + q.proceeds, lastActiveAt: now, isIdle: false });
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
-    if (stateExists) tx.update(refs.state(), nextState);
-    else tx.set(refs.state(), { ...state, ...nextState });
+    if (stateExists) tx.update(R.state(), nextState);
+    else tx.set(R.state(), { ...state, ...nextState });
 
-    const shortRef = db.collection("shorts").doc();
+    const shortRef = R.col("shorts").doc();
     const short: Short = {
       id: shortRef.id,
       ownerId: uid,
@@ -93,9 +92,9 @@ export const openShort = gameCall(async (req) => {
       borrowFeesPaid: 0,
     };
     tx.set(shortRef, short);
-    recordTrade(tx, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText });
+    recordTrade(tx, R, { player, stock, side: "sell", shares, cashAmount: q.proceeds, netCash: q.proceeds, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "openShort", postText });
     // A short's size for Discord is the value sold at the pre-trade price.
-    announceTrade(tx, { kind: "openShort", traderName: player.displayName, stock, cash: shares * q.priceBefore, shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
+    announceTrade(tx, R, { kind: "openShort", traderName: player.displayName, stock, cash: shares * q.priceBefore, shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
     return short;
   });
 });
@@ -107,22 +106,21 @@ export const openShort = gameCall(async (req) => {
  * sell holdings first). Nothing is settled automatically here any more.
  */
 export const closeShort = gameCall(async (req) => {
-  const uid = requireAuth(req);
-  const data = asObject(req.data);
+  const { uid, R, data } = await gameCtx(req);
   const shortId = reqString(data, "shortId", 128);
   const postText = optString(data, "postText", 5000);
   const now = Date.now();
 
   return db.runTransaction(async (tx) => {
-    const cfg = await readConfig(tx);
-    const { state, exists: stateExists } = await readState(tx, now);
-    const shortSnap = await tx.get(refs.short(shortId));
+    const cfg = await readConfig(tx, R);
+    const { state, exists: stateExists } = await readState(tx, R, now);
+    const shortSnap = await tx.get(R.short(shortId));
     if (!shortSnap.exists) throw new HttpsError("not-found", "Short not found.");
     const short = shortSnap.data() as Short;
     if (short.ownerId !== uid) throw new HttpsError("permission-denied", "That isn't your short.");
     if (short.status !== "open") throw new HttpsError("failed-precondition", "That short is already closed.");
 
-    const [playerSnap, stockSnap] = await Promise.all([tx.get(refs.player(uid)), tx.get(refs.stock(short.stockId))]);
+    const [playerSnap, stockSnap] = await Promise.all([tx.get(R.player(uid)), tx.get(R.stock(short.stockId))]);
     if (!playerSnap.exists) throw new HttpsError("permission-denied", "You're not an approved player.");
     const player = playerSnap.data() as Player;
     if (!stockSnap.exists) throw new HttpsError("not-found", "Stock not found.");
@@ -149,12 +147,12 @@ export const closeShort = gameCall(async (req) => {
     const realisedPnl = short.openProceeds - q.cost - short.borrowFeesPaid;
 
     const tick = priceTick(stock, q.priceAfter, state.currentWeek);
-    applyPool(tx, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
+    applyPool(tx, R, stock, q.newPoolCash, q.newPoolShares, q.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
     const nextState = { prizePool: state.prizePool + q.fee, weekFees: state.weekFees + q.fee };
-    if (stateExists) tx.update(refs.state(), nextState);
-    else tx.set(refs.state(), { ...state, ...nextState });
+    if (stateExists) tx.update(R.state(), nextState);
+    else tx.set(R.state(), { ...state, ...nextState });
 
-    tx.update(refs.short(shortId), {
+    tx.update(R.short(shortId), {
       status: "closed",
       closePrice: q.priceAfter,
       closeCost: q.cost,
@@ -162,9 +160,9 @@ export const closeShort = gameCall(async (req) => {
       closedAt: now,
       closeWeek: state.currentWeek,
     });
-    recordTrade(tx, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText });
-    announceTrade(tx, { kind: "closeShort", traderName: player.displayName, stock, cash: q.cost, shares: short.shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
-    tx.update(refs.player(uid), { cash: player.cash - q.cost, lastActiveAt: now, isIdle: false });
+    recordTrade(tx, R, { player, stock, side: "buy", shares: short.shares, cashAmount: q.cost, netCash: -q.cost, fee: q.fee, priceBefore: q.priceBefore, priceAfter: q.priceAfter, week: state.currentWeek, now, kind: "closeShort", postText });
+    announceTrade(tx, R, { kind: "closeShort", traderName: player.displayName, stock, cash: q.cost, shares: short.shares, priceBefore: q.priceBefore, priceAfter: q.priceAfter, postText, tick }, state, cfg, now);
+    tx.update(R.player(uid), { cash: player.cash - q.cost, lastActiveAt: now, isIdle: false });
     return { ...short, status: "closed", closePrice: q.priceAfter, closeCost: q.cost, realisedPnl, closedAt: now };
   });
 });
@@ -172,6 +170,7 @@ export const closeShort = gameCall(async (req) => {
 /** Record a short open/close in the trades feed, with an optional linked post. */
 function recordTrade(
   tx: Transaction,
+  R: Refs,
   a: {
     player: Player;
     stock: Stock;
@@ -188,11 +187,11 @@ function recordTrade(
     postText: string | null;
   },
 ) {
-  const tradeRef = db.collection("trades").doc();
+  const tradeRef = R.col("trades").doc();
   let linkedPostId: string | null = null;
   const summary = shortSummary({ ownerName: a.player.displayName, shares: a.shares, stockName: a.stock.displayName }, a.kind === "openShort" ? "opened" : "closed");
   if (a.postText) {
-    const postRef = db.collection("posts").doc();
+    const postRef = R.col("posts").doc();
     linkedPostId = postRef.id;
     const post: Post = {
       id: postRef.id,

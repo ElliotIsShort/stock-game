@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useServerRouter } from "@/components/ServerLink";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { doc } from "firebase/firestore";
 import {
@@ -22,7 +22,9 @@ import {
   type Registration,
   type SiteContent,
 } from "@fsm/shared";
-import { useGame } from "@/components/GameProvider";
+import { useGame, usePaths } from "@/components/GameProvider";
+import { AddExistingUser, Approvals, ServerSelector, ServersPanel } from "@/components/admin/ServerAdmin";
+import { useAction } from "@/lib/useAction";
 import { fb } from "@/lib/firebase";
 import { useDoc, useQuery } from "@/lib/hooks";
 import { api, errorMessage } from "@/lib/api";
@@ -31,35 +33,50 @@ import { formatDevlogDate, useDevlog } from "@/lib/devlog";
 import { SimpleMarkdown } from "@/components/SimpleMarkdown";
 
 export default function AdminPage() {
-  const { isAdmin, setPreviewAsPlayer } = useGame();
-  const router = useRouter();
+  const { isAdmin, setPreviewAsPlayer, serverId } = useGame();
+  const router = useServerRouter();
   if (!isAdmin) return <p className="muted">Admins only.</p>;
   return (
     <div className="stack">
       <div className="row between wrap">
         <h1>Admin</h1>
-        <button
-          type="button"
-          title="Hide admin tools and browse as a player. Undo from the banner or the account menu."
-          onClick={() => {
-            setPreviewAsPlayer(true);
-            router.push("/");
-          }}
-        >
-          View as player
-        </button>
+        {serverId && (
+          <button
+            type="button"
+            title="Hide admin tools and browse as a player. Undo from the banner or the account menu."
+            onClick={() => {
+              setPreviewAsPlayer(true);
+              router.push("/");
+            }}
+          >
+            View as player
+          </button>
+        )}
       </div>
+
+      {/* Across every server. */}
       <Maintenance />
+      <ServersPanel />
       <Approvals />
-      <Players />
-      <WeeklyClose />
-      <DiscordAdmin />
-      <ConfigEditor />
+      <AddExistingUser />
       <DevlogEditor />
-      <ContentEditor />
-      <Delist />
-      <AuditLog />
-      <ResetGame />
+
+      {/* Everything below applies to the selected server. */}
+      <ServerSelector />
+      {serverId ? (
+        <>
+          <Players />
+          <WeeklyClose />
+          <DiscordAdmin />
+          <ConfigEditor />
+          <ContentEditor />
+          <Delist />
+          <AuditLog />
+          <ResetGame />
+        </>
+      ) : (
+        <p className="muted">Create or choose a server to manage its players, settings and weekly close.</p>
+      )}
     </div>
   );
 }
@@ -95,9 +112,9 @@ function Maintenance() {
   );
 }
 
-/** Discord webhook: check the connection and flush the digest. The URL itself lives in a Functions secret. */
+/** This server's Discord webhook: check the connection and flush the digest. The URL is write-only (set it in the Servers panel). */
 function DiscordAdmin() {
-  const { config, players } = useGame();
+  const { config, players, server } = useGame();
   const { busy, run, view } = useAction();
   const linked = players.filter((p) => p.discordId).length;
   return (
@@ -135,14 +152,18 @@ function DiscordAdmin() {
           Send digest now
         </button>
       </div>
+      <p className="small">
+        Webhook for this server: <strong>{server?.hasDiscordWebhook ? "set" : "not set"}</strong>.{" "}
+        {!server?.hasDiscordWebhook && "Nothing is posted to Discord until it is set; it never falls back to another server's channel."}
+      </p>
       <details className="small muted">
         <summary>Setting up the webhook</summary>
         <ol>
           <li>In Discord: channel settings (⚙️) → <strong>Integrations</strong> → <strong>Webhooks</strong> → <strong>New Webhook</strong>. Name it Stonker, then <strong>Copy Webhook URL</strong>.</li>
-          <li>In a terminal in the project: <code>npx firebase functions:secrets:set DISCORD_WEBHOOK_URL</code> and paste the URL.</li>
-          <li>Redeploy the functions (<code>npm run deploy:backend</code>), then press <strong>Send test message</strong>.</li>
+          <li>In the <strong>Servers</strong> panel above, press <strong>Set webhook</strong> on this server and paste the URL.</li>
+          <li>Come back here and press <strong>Send test message</strong>.</li>
         </ol>
-        <p>Treat the URL like a password: anyone with it can post to the channel. It&apos;s never stored in Firestore.</p>
+        <p>Treat the URL like a password: anyone with it can post to the channel. It&apos;s stored where only the backend can read it, and can&apos;t be shown again.</p>
       </details>
       {view}
     </section>
@@ -216,14 +237,15 @@ function Players() {
 
 /** Edit the Rules page shown to players. */
 function ContentEditor() {
-  const content = useDoc<SiteContent>(doc(fb().db, "content", "global"), []);
+  const paths = usePaths();
+  const content = useDoc<SiteContent>(doc(fb().db, paths.content), []);
   const [rules, setRules] = useState<string | null>(null);
   const { busy, run, view } = useAction();
 
   // Seed the editor once content loads (or fall back to the default).
   useEffect(() => {
     if (content.loading) return;
-    setRules((r) => (r === null ? content.data?.rules ?? DEFAULT_RULES : r));
+    setRules((r) => (r === null ? (content.data?.rules?.trim() ? content.data.rules : DEFAULT_RULES) : r));
   }, [content.loading, content.data]);
 
   return (
@@ -242,7 +264,7 @@ function ContentEditor() {
         disabled={busy}
         onClick={() =>
           run(async () => {
-            if (rules === null || rules === (content.data?.rules ?? DEFAULT_RULES)) return "No changes to save.";
+            if (rules === null || rules === (content.data?.rules?.trim() ? content.data.rules : DEFAULT_RULES)) return "No changes to save.";
             await api.updateContent({ rules });
             return "Saved the rules.";
           })
@@ -370,77 +392,6 @@ function DevlogEditor() {
           {editing && <button type="button" disabled={busy} onClick={() => startEdit(null)}>Cancel</button>}
         </div>
       </form>
-      {view}
-    </section>
-  );
-}
-
-function useAction() {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  async function run(fn: () => Promise<string>) {
-    setBusy(true);
-    setMsg(null);
-    try {
-      setMsg({ ok: true, text: await fn() });
-    } catch (err) {
-      setMsg({ ok: false, text: errorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  }
-  const view = msg && <p className={msg.ok ? "success" : "error"} role={msg.ok ? "status" : "alert"}>{msg.text}</p>;
-  return { busy, run, view };
-}
-
-function Approvals() {
-  const pending = useQuery<Registration>(
-    query(collection(fb().db, "registrations"), where("status", "==", "pending"), orderBy("createdAt", "asc")),
-    [],
-  );
-  const { busy, run, view } = useAction();
-  return (
-    <section className="card">
-      <h2>Pending sign-ups</h2>
-      {pending.error && <p className="error">{pending.error.message}</p>}
-      {pending.data.length === 0 && <p className="muted">No one waiting.</p>}
-      <ul className="plain">
-        {pending.data.map((r) => (
-          <li key={r.uid} className="row between wrap">
-            <span>
-              <strong>{r.displayName}</strong> <span className="muted small">{r.email ?? "no email"} · {ago(r.createdAt)}</span>
-            </span>
-            <span className="row">
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    const res = await api.approvePlayer(r.uid);
-                    return `Approved ${r.displayName}: ${gbp(res.startingCash)} cash, listed at ${gbp(res.listingPrice)}.`;
-                  })
-                }
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  if (!window.confirm(`Decline ${r.displayName}'s request?`)) return;
-                  run(async () => {
-                    await api.rejectPlayer(r.uid);
-                    return `Declined ${r.displayName}.`;
-                  });
-                }}
-              >
-                Decline
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
       {view}
     </section>
   );
@@ -669,11 +620,15 @@ function Delist() {
 }
 
 function AuditLog() {
-  const log = useQuery<AuditEntry>(query(collection(fb().db, "auditLog"), orderBy("createdAt", "desc"), limit(50)), []);
-  const { playerById } = useGame();
+  const { playerById, serverId } = useGame();
+  const log = useQuery<AuditEntry>(
+    query(collection(fb().db, "auditLog"), where("serverId", "==", serverId), orderBy("createdAt", "desc"), limit(50)),
+    [serverId],
+  );
   return (
     <section className="card">
       <h2>Audit log</h2>
+      <p className="muted small">Actions in this server. Global ones (sign-up decisions, maintenance) aren't listed here.</p>
       {log.data.length === 0 && <p className="muted">No admin actions yet.</p>}
       <ul className="plain audit">
         {log.data.map((e, i) => (
@@ -698,11 +653,12 @@ function ResetGame() {
   const ready = typed === "RESET";
   return (
     <section className="card danger-zone">
-      <h2>Reset the game</h2>
+      <h2>Reset this server</h2>
       <p className="muted small">
-        Puts the market back to day one: deletes every player, stock, holding, trade, post, photo and weekly report, and restarts at
-        week 1 with an empty prize pool. Sign-in accounts, admins, settings and this audit log are kept. Everyone who was playing goes
-        back to <strong>Pending sign-ups</strong> above, so you just re-approve them and they start fresh with founder cash.
+        Puts THIS server's market back to day one (other servers are untouched): deletes every player, stock, holding, trade, post, photo and weekly report, and restarts at
+        week 1 with an empty prize pool. Sign-in accounts, admins, settings, its Discord webhook and the audit log are kept. Everyone who was playing and isn't
+        in another server goes back to <strong>Pending sign-ups</strong> above, so you just re-approve them and they start fresh with founder cash.
+        People who are also in another server stay approved: add them back with <strong>Add an existing user</strong>.
       </p>
       <form
         className="row wrap"

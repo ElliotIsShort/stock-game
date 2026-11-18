@@ -35,6 +35,17 @@ export function changeClass(n: number): string {
   return n > 0.00005 ? "up" : n < -0.00005 ? "down" : "flat";
 }
 
+import { withServer } from "@fsm/shared";
+
+/**
+ * An internal path with `?s=<server>` added, or unchanged when `serverParam` is
+ * null (people in a single server never see it). Prefer the `<Link>` from
+ * ServerLink, which calls this for you.
+ */
+export function serverHref(href: string, serverParam: string | null | undefined): string {
+  return withServer(href, serverParam);
+}
+
 /** Links are relative to basePath automatically via next/link; this helps for query strings. */
 export function stockHref(id: string): string {
   return `/stock/?id=${encodeURIComponent(id)}`;

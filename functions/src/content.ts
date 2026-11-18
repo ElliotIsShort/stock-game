@@ -7,12 +7,11 @@ import {
   type DevlogEntry,
   type SiteContent,
 } from "@fsm/shared";
-import { gameCall, asObject, auditEntry, auditRef, db, optString, refs, reqString, requireAdmin } from "./common";
+import { gameCall, gameCtx, asObject, auditEntry, auditRef, db, optString, reqString, requireAdmin } from "./common";
 
-/** Admin: edit the Rules and/or Change log shown to players. */
+/** Admin: edit this game's Rules (and the legacy change log field). */
 export const updateContent = gameCall(async (req) => {
-  const adminId = await requireAdmin(req);
-  const data = asObject(req.data);
+  const { uid: adminId, serverId, R, data } = await gameCtx(req, { admin: true });
   const patch: Partial<Pick<SiteContent, "rules" | "changelog">> = {};
   for (const key of ["rules", "changelog"] as const) {
     if (data[key] === undefined) continue;
@@ -25,8 +24,8 @@ export const updateContent = gameCall(async (req) => {
   if (Object.keys(patch).length === 0) throw new HttpsError("invalid-argument", "Nothing to update.");
   const now = Date.now();
   await db.runTransaction(async (tx) => {
-    tx.set(refs.content(), { ...patch, updatedAt: now }, { merge: true });
-    tx.set(auditRef(), auditEntry(adminId, "updateContent", "content/global", { fields: Object.keys(patch) }, now));
+    tx.set(R.content(), { ...patch, updatedAt: now }, { merge: true });
+    tx.set(auditRef(), auditEntry(adminId, "updateContent", "content/global", { fields: Object.keys(patch) }, now, serverId));
   });
   return { ok: true };
 });

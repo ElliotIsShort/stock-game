@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
 import { NET_WORTH_SERIES_WEEKS, mergeNetWorthPoints, type NetWorthHistory, type NetWorthSeries } from "@fsm/shared";
+import { usePaths } from "@/components/GameProvider";
 import { fb } from "./firebase";
 import { useDoc, useQuery } from "./hooks";
 
@@ -14,9 +15,10 @@ import { useDoc, useQuery } from "./hooks";
  */
 export function useNetWorthPoints(uid: string | null, live: number | undefined): { t: number; v: number }[] {
   const db = fb().db;
-  const history = useDoc<NetWorthHistory>(uid ? doc(db, "netWorthHistory", uid) : null, [uid]);
+  const paths = usePaths();
+  const history = useDoc<NetWorthHistory>(uid ? doc(db, `${paths.netWorthHistory}/${uid}`) : null, [uid]);
   const series = useQuery<NetWorthSeries>(
-    uid ? query(collection(db, "netWorthSeries"), where("uid", "==", uid), orderBy("week", "desc"), limit(NET_WORTH_SERIES_WEEKS)) : null,
+    uid ? query(collection(db, paths.netWorthSeries), where("uid", "==", uid), orderBy("week", "desc"), limit(NET_WORTH_SERIES_WEEKS)) : null,
     [uid],
   );
   return useMemo(() => {

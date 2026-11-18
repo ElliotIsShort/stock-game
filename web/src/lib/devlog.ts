@@ -16,7 +16,8 @@ const SEEN_KEY = "fsm:devlogSeen";
 export function useDevlog(): { entries: DevlogEntry[]; loading: boolean; legacy: boolean } {
   const db = fb().db;
   const q = useQuery<DevlogEntry>(query(collection(db, "devlog"), orderBy("date", "desc")), []);
-  const content = useDoc<SiteContent>(doc(db, "content", "global"), []);
+  // The dev diary is global: there is no per-server legacy change log to fall back to any more.
+  const content = useDoc<SiteContent>(null, []);
   return useMemo(() => {
     if (q.loading) return { entries: [], loading: true, legacy: false };
     if (q.data.length > 0) return { entries: sortDevlog(q.data), loading: false, legacy: false };

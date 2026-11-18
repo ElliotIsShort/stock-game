@@ -4,9 +4,29 @@ import { httpsCallable } from "firebase/functions";
 import type { AlertDirection, DevlogEntry, GameConfig, Post, PriceAlert, PrizeWinner, ReactionType, Short, TouchResult, Trade, TradeSide } from "@fsm/shared";
 import { fb } from "./firebase";
 
-async function call<Req, Res>(name: string, data: Req): Promise<Res> {
-  const fn = httpsCallable<Req, Res>(fb().functions, name);
-  const res = await fn(data);
+/**
+ * The server (game) the user is viewing. `GameProvider` sets it before any
+ * child renders, and remounts on a change, so a request can never go to the
+ * wrong server. Admin calls that target another one pass `serverId` explicitly.
+ */
+let currentServer: string | null = null;
+export function setApiServer(id: string | null): void {
+  currentServer = id;
+}
+
+/** Every callable that acts inside one server. `register`, `rejectPlayer`, the devlog and `createServer` are global. */
+const SERVER_SCOPED = new Set([
+  "touch", "setDiscordId", "createAlert", "cancelAlert", "markNotificationsRead", "testDiscord", "sendDiscordDigest", "trade",
+  "createPost", "toggleReaction", "setStockPhoto", "approvePlayer", "addPlayerToServer", "deletePost", "delistPlayer", "updateConfig",
+  "runWeeklyClose", "setCloseTime", "resetGame", "updateContent", "renamePlayer", "openShort", "closeShort", "setTicker",
+  "setDiscordWebhook", "archiveServer", "unarchiveServer", "renameServer",
+]);
+
+async function call<Req, Res>(name: string, data: Req, serverId?: string | null): Promise<Res> {
+  const fn = httpsCallable<unknown, Res>(fb().functions, name);
+  const target = serverId ?? currentServer;
+  const payload = SERVER_SCOPED.has(name) ? { ...(data as object), serverId: target } : data;
+  const res = await fn(payload);
   return res.data;
 }
 
@@ -29,7 +49,23 @@ export const api = {
     call<{ photo: string | null; uid?: string }, { ok: true; hasPhoto: boolean }>("setStockPhoto", uid ? { photo, uid } : { photo }),
   // Admin
   setMaintenance: (enabled: boolean) => call<{ enabled: boolean }, { enabled: boolean }>("setMaintenance", { enabled }),
-  approvePlayer: (uid: string) => call<{ uid: string }, { startingCash: number; listingPrice: number }>("approvePlayer", { uid }),
+  /** Approve a pending registration into a chosen server. */
+  approvePlayer: (uid: string, serverId: string) =>
+    call<{ uid: string }, { startingCash: number; listingPrice: number }>("approvePlayer", { uid }, serverId),
+  /** Add an already-approved user to another server (optionally under a different name there). */
+  addPlayerToServer: (uid: string, serverId: string, displayName?: string) =>
+    call<{ uid: string; displayName?: string }, { startingCash: number; listingPrice: number }>(
+      "addPlayerToServer",
+      displayName ? { uid, displayName } : { uid },
+      serverId,
+    ),
+  createServer: (req: { name: string; closesAt: number; copyConfigFrom?: string }) =>
+    call<typeof req, { serverId: string; name: string }>("createServer", req),
+  archiveServer: (serverId: string) => call<object, { serverId: string; status: string }>("archiveServer", {}, serverId),
+  unarchiveServer: (serverId: string) => call<object, { serverId: string; status: string }>("unarchiveServer", {}, serverId),
+  renameServer: (serverId: string, name: string) => call<{ name: string }, { serverId: string; from: string; to: string }>("renameServer", { name }, serverId),
+  /** Set (or clear with "") a server's Discord webhook. The URL is write-only: it can never be read back. */
+  setDiscordWebhook: (serverId: string, url: string) => call<{ url: string }, { ok: true; set: boolean }>("setDiscordWebhook", { url }, serverId),
   rejectPlayer: (uid: string) => call("rejectPlayer", { uid }),
   deletePost: (postId: string, reason?: string) => call("deletePost", { postId, reason }),
   delistPlayer: (uid: string) => call<{ uid: string }, { payouts: { uid: string; cash: number }[] }>("delistPlayer", { uid }),

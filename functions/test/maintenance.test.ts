@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { call, clientRead, clientWrite, expectCallError, getDoc, listDocs, setupPlayers, sleep, tickScheduler, wipeEmulators, type User } from "./helpers";
+import { call, clientRead, clientWrite, expectCallError, getDoc, listDocs, setClosesAt, setupPlayers, sleep, tickScheduler, wipeEmulators, type User } from "./helpers";
 
 let alice: User; // admin
 let bob: User;
@@ -42,8 +42,7 @@ describe("maintenance mode", () => {
     await call(alice, "setMaintenance", { enabled: true });
     const state = await getDoc("meta/state");
     // Make the week due by moving closesAt into the past (bypasses rules, like the console).
-    const { patchDoc } = await import("./helpers");
-    await patchDoc("meta/state", { closesAt: Date.now() - 60_000 });
+    await setClosesAt(Date.now() - 60_000);
     await tickScheduler();
     await sleep(500);
     expect((await getDoc("meta/state")).currentWeek).toBe(state.currentWeek);

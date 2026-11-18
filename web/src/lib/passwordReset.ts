@@ -50,6 +50,6 @@ export function resetResultForError(code: string): ResetResult {
   if (code === "auth/too-many-requests" || code === "auth/quota-exceeded") {
     return { ok: false, message: "Too many reset requests. Wait a few minutes and try again." };
   }
-  if (code === "auth/network-request-failed") return { ok: false, message: "Couldn't reach the server. Check your connection and try again." };
+  if (code === "auth/network-request-failed") return { ok: false, message: "Couldn't connect. Check your connection and try again." };
   return { ok: false, message: "Couldn't send the reset email right now. Try again in a minute." };
 }

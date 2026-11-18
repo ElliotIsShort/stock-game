@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useMemo, useState } from "react";
 import { median } from "@fsm/shared";
 import { Avatar } from "@/components/Avatar";

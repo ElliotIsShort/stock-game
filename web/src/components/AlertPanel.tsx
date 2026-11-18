@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useState, type FormEvent } from "react";
 import { alertSummary, validateAlert, type AlertDirection, type PriceAlert, type Stock } from "@fsm/shared";
 import { api, errorMessage } from "@/lib/api";

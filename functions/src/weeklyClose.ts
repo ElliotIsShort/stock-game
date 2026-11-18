@@ -42,9 +42,8 @@ import {
   type TradeMove,
   type WeeklyReport,
 } from "@fsm/shared";
-import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWorld, refs } from "./common";
+import { auditEntry, auditRef, db, holdingsByUid, readConfig, readState, readWorld, type Refs } from "./common";
 import { enqueueDiscord } from "./discord";
-import { seriesRef } from "./netWorth";
 import { announceMargin, marginPatch } from "./margin";
 
 export interface CloseOptions {
@@ -70,13 +69,13 @@ export type CloseResult =
  * Runs as a single Firestore transaction so balances are never half-updated
  * and trades can't interleave with the close.
  */
-export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
+export async function closeWeek(R: Refs, opts: CloseOptions): Promise<CloseResult> {
   const now = Date.now();
 
   return db.runTransaction(async (tx): Promise<CloseResult> => {
     // ---------- Reads ----------
-    const cfg = await readConfig(tx);
-    const { state } = await readState(tx, now);
+    const cfg = await readConfig(tx, R);
+    const { state } = await readState(tx, R, now);
     const week = state.currentWeek;
     const closesAt = effectiveClosesAt(state, now);
 
@@ -92,22 +91,22 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     // an early manual close leaves it where it is (the admin can edit it).
     const nextClosesAt = now >= closesAt ? advanceClosesAt(closesAt, now) : closesAt;
 
-    const world = await readWorld(tx);
+    const world = await readWorld(tx, R);
     const [tradesSnap, postsSnap, prevSnap, openShortsSnap] = await Promise.all([
-      tx.get(db.collection("trades").where("week", "==", week)),
-      tx.get(db.collection("posts").where("week", "==", week)),
-      tx.get(refs.report(week - 1)),
-      tx.get(db.collection("shorts").where("status", "==", "open")),
+      tx.get(R.col("trades").where("week", "==", week)),
+      tx.get(R.col("posts").where("week", "==", week)),
+      tx.get(R.report(week - 1)),
+      tx.get(R.col("shorts").where("status", "==", "open")),
     ]);
     const openShorts = openShortsSnap.docs.map((d) => d.data() as Short);
     // Existing net-worth history, so this week's point can be appended.
     const activePlayerIds = world.players.filter((p) => p.isActive).map((p) => p.uid);
-    const historySnaps = await Promise.all(activePlayerIds.map((uid) => tx.get(refs.netWorthHistory(uid))));
+    const historySnaps = await Promise.all(activePlayerIds.map((uid) => tx.get(R.netWorthHistory(uid))));
     const historyOf = new Map(activePlayerIds.map((uid, i) => [uid, historySnaps[i].data()?.points ?? []]));
     // Holdings from before cost tracking: rebuild cost basis / holding run from each owner's trades (once).
     const needsStats = (h: Holding) => h.costBasis == null || h.holdingSince == null;
     const legacyUids = [...new Set(world.holdings.filter(needsStats).map((h) => h.uid))];
-    const legacyTradeSnaps = await Promise.all(legacyUids.map((uid) => tx.get(db.collection("trades").where("traderId", "==", uid))));
+    const legacyTradeSnaps = await Promise.all(legacyUids.map((uid) => tx.get(R.col("trades").where("traderId", "==", uid))));
     const backfill = new Map<string, { costBasis: number; holdingSince: number }>();
     legacyUids.forEach((uid, i) => {
       const mine = legacyTradeSnaps[i].docs.map((d) => d.data() as Trade);
@@ -210,7 +209,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       if (fee <= 0) continue;
       const owner = players.get(short.ownerId);
       if (owner) owner.cash -= fee;
-      else tx.update(refs.player(short.ownerId), { cash: FieldValue.increment(-fee) });
+      else tx.update(R.player(short.ownerId), { cash: FieldValue.increment(-fee) });
       borrowFeesCollected += fee;
       borrowFeeWrites.push({ shortId: short.id, total: short.borrowFeesPaid + fee });
     }
@@ -277,7 +276,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       marginUpdates.set(p.uid, {
         patch: marginPatch(next.flags),
         // Week N's posts are dated into week N+1 like the close post itself.
-        announce: () => announceMargin(tx, p, next.event, next.flags, status, week + 1, now),
+        announce: () => announceMargin(tx, R, p, next.event, next.flags, status, week + 1, now),
       });
     }
 
@@ -369,7 +368,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       changes[k] = typeof prev === "number" ? v - prev : null;
     }
 
-    const reportRef = refs.report(week);
+    const reportRef = R.report(week);
     const reportBody: Omit<WeeklyReport, "markdown"> = {
       id: reportRef.id,
       week,
@@ -435,7 +434,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     // ---------- Writes ----------
     for (const p of players.values()) {
       const endWorth = worthOf(p);
-      tx.update(refs.player(p.uid), {
+      tx.update(R.player(p.uid), {
         cash: p.cash,
         isIdle: p.isIdle,
         totalAllowances: p.totalAllowances,
@@ -447,19 +446,19 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       marginUpdates.get(p.uid)?.announce();
       // Append this week's net-worth sample, keeping the most recent N.
       const points = [...(historyOf.get(p.uid) ?? []), { week, t: now, v: endWorth }].slice(-NET_WORTH_HISTORY_MAX);
-      tx.set(refs.netWorthHistory(p.uid), { uid: p.uid, points });
+      tx.set(R.netWorthHistory(p.uid), { uid: p.uid, points });
       // And the closing value as the last fine-grained point of the week (no read: a blind append).
-      tx.set(seriesRef(p.uid, week), { uid: p.uid, week, points: FieldValue.arrayUnion({ t: now, v: endWorth }), openSince: now, updatedAt: now }, { merge: true });
+      tx.set(R.series(p.uid, week), { uid: p.uid, week, points: FieldValue.arrayUnion({ t: now, v: endWorth }), openSince: now, updatedAt: now }, { merge: true });
     }
     // Bankrupt players come back at the start of each new week (§bankruptcy).
     // They were deactivated, so they're not in `players`; reactivate directly.
     for (const p of world.players) {
       if (p.bankruptAt && !p.isActive) {
-        tx.update(refs.player(p.uid), { isActive: true, bankruptAt: FieldValue.delete(), lastActiveAt: now, netWorthWeekStart: worthOf(p) });
+        tx.update(R.player(p.uid), { isActive: true, bankruptAt: FieldValue.delete(), lastActiveAt: now, netWorthWeekStart: worthOf(p) });
       }
     }
     for (const s of stocks.values()) {
-      tx.update(refs.stock(s.id), {
+      tx.update(R.stock(s.id), {
         poolCash: s.poolCash,
         poolShares: s.poolShares,
         k: s.k,
@@ -474,10 +473,10 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
     }
     for (const [key, stats] of backfill) {
       const h = world.holdings.find((x) => `${x.uid}_${x.stockId}` === key)!;
-      tx.update(refs.holding(h.uid, h.stockId), stats);
+      tx.update(R.holding(h.uid, h.stockId), stats);
     }
     // Borrow fees collected this close seed next week's prize pool.
-    tx.set(refs.state(), {
+    tx.set(R.state(), {
       currentWeek: week + 1,
       prizePool: state.prizePool - prizePaid + borrowFeesCollected,
       weekFees: 0,
@@ -486,10 +485,12 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       closesAt: nextClosesAt,
       avgNetWorth,
     });
-    for (const w of borrowFeeWrites) tx.update(refs.short(w.shortId), { borrowFeesPaid: w.total });
+    // Denormalised close time the scheduler queries, in the same transaction.
+    tx.update(R.server(), { closesAt: nextClosesAt });
+    for (const w of borrowFeeWrites) tx.update(R.short(w.shortId), { borrowFeesPaid: w.total });
     tx.set(reportRef, report);
 
-    const postRef = db.collection("posts").doc();
+    const postRef = R.col("posts").doc();
     const growthText = (g: number) => `${(g * 100).toFixed(2)}%`;
     const winnerText =
       winners.length === 0
@@ -515,7 +516,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
       createdAt: now,
     };
     tx.set(postRef, sysPost);
-    enqueueDiscord(tx, "high", "weeklyClose", weeklyCloseMessage({
+    enqueueDiscord(tx, R, "high", "weeklyClose", weeklyCloseMessage({
       week,
       prizePaid,
       winners,
@@ -531,7 +532,7 @@ export async function closeWeek(opts: CloseOptions): Promise<CloseResult> {
         closesAt: { from: closesAt, to: nextClosesAt },
         prizePaid,
         winners: winners.map((w) => ({ playerId: w.playerId, prizeAmount: w.prizeAmount })),
-      }, now),
+      }, now, R.serverId),
     );
 
     return { closed: true, week, reportId: reportRef.id, winners, prize: prizePaid };

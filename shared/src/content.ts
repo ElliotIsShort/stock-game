@@ -15,7 +15,7 @@ export interface SiteContent {
 
 export const DEFAULT_RULES = `# How Stonker works
 
-Everyone in the group is a tradable stock, named after them. You trade each other with play money. There is no real money, ever.
+Everyone playing is a tradable stock, named after them. You trade each other with play money. There is no real money, ever.
 
 ## Trading
 - You buy and sell shares in other people against an automated market maker, not against each other directly. Each stock has a pool of cash and shares; the price is cash ÷ shares.

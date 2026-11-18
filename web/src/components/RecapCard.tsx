@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { alertSummary, type RecapTrader } from "@fsm/shared";
 import { changeClass, duration, gbp, pct, profileHref, signedGbp } from "@/lib/format";
 import { liveContenders } from "@/lib/standings";

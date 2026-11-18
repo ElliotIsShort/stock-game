@@ -1,11 +1,11 @@
 import { HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { defineSecret } from "firebase-functions/params";
 import { logger } from "firebase-functions";
 import { FieldValue, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 import {
   DISCORD_ID_RE,
+  isServerCode,
   digestMessage,
   mentionUids,
   mergeConfig,
@@ -20,24 +20,22 @@ import {
   type MentionTarget,
   type Player,
 } from "@fsm/shared";
-import { gameCall, inMaintenance, asObject, auditEntry, auditRef, db, refs, requireAdmin, requireAuth } from "./common";
+import { gameCall, gameCtx, globalRefs, inMaintenance, auditEntry, auditRef, db, refs, type Refs } from "./common";
 
 /**
- * Discord, webhook-only: no bot process. Game code writes messages to
- * `discordOutbox` inside its own transaction; `discordDeliver` (a Firestore
- * trigger) posts them. The webhook URL lives only in the DISCORD_WEBHOOK_URL
- * Functions secret, never in Firestore. Routine posts are rate-limited per
- * hour; the overflow is "queued" and rolled into one digest by
- * `discordDigest` (hourly) or the admin "Send digest now" button.
+ * Discord, webhook-only: no bot process. Game code writes messages to the
+ * server's `discordOutbox` inside its own transaction; `discordDeliver` (a
+ * Firestore trigger) posts them. Each server has its OWN webhook, stored in
+ * the server-only doc `servers/{id}/private/discord` (clients can never read
+ * it). There is deliberately no fallback to any other server's webhook, so
+ * nothing in one server can reach another's channel. Routine posts are
+ * rate-limited per hour; the overflow is "queued" and rolled into one digest
+ * by `discordDigest` (hourly) or the admin "Send digest now" button.
  */
-export const DISCORD_WEBHOOK_URL = defineSecret("DISCORD_WEBHOOK_URL");
-
-const outbox = () => db.collection("discordOutbox");
-const rateRef = () => db.doc("discordState/rate") as DocumentReference<DiscordRateState>;
 
 /** Queue a Discord post as part of the caller's transaction (so it only goes out if the change commits). */
-export function enqueueDiscord(tx: Transaction, priority: DiscordOutboxItem["priority"], kind: string, message: DiscordMessage, now: number): void {
-  const ref = outbox().doc();
+export function enqueueDiscord(tx: Transaction, R: Refs, priority: DiscordOutboxItem["priority"], kind: string, message: DiscordMessage, now: number): void {
+  const ref = R.outbox().doc();
   const item: DiscordOutboxItem = { id: ref.id, priority, kind, message, status: "pending", createdAt: now };
   tx.set(ref, stripUndefined(item));
 }
@@ -64,21 +62,17 @@ export function isAllowedWebhookUrl(raw: string): boolean {
   }
 }
 
-function webhookUrl(): string | null {
-  let value = "";
-  try {
-    value = DISCORD_WEBHOOK_URL.value().trim();
-  } catch {
-    return null;
-  }
+/** This server's webhook, or null when none is set (or it isn't a real webhook URL). */
+async function webhookUrl(R: Refs): Promise<string | null> {
+  const value = ((await R.privateDiscord().get()).data()?.webhookUrl as string | undefined)?.trim();
   return value && isAllowedWebhookUrl(value) ? value : null;
 }
 
-async function mentionTargets(msgs: DiscordMessage[]): Promise<Map<string, MentionTarget>> {
+async function mentionTargets(R: Refs, msgs: DiscordMessage[]): Promise<Map<string, MentionTarget>> {
   const uids = [...new Set(msgs.flatMap(mentionUids))];
   const out = new Map<string, MentionTarget>();
   if (uids.length === 0) return out;
-  const snaps = await db.getAll(...uids.map((u) => refs.player(u)));
+  const snaps = await db.getAll(...uids.map((u) => R.player(u)));
   for (const s of snaps) {
     const p = s.data() as Player | undefined;
     if (p) out.set(p.uid, { name: p.displayName, discordId: p.discordId });
@@ -88,8 +82,8 @@ async function mentionTargets(msgs: DiscordMessage[]): Promise<Map<string, Menti
 
 type SendResult = { ok: true } | { ok: false; status: number | null; error: string };
 
-async function post(url: string, msg: DiscordMessage, at: number): Promise<SendResult> {
-  const targets = await mentionTargets([msg]);
+async function post(R: Refs, url: string, msg: DiscordMessage, at: number): Promise<SendResult> {
+  const targets = await mentionTargets(R, [msg]);
   const body = renderWebhookBody(msg, (uid) => targets.get(uid), at);
   try {
     const res = await fetch(url, {
@@ -111,15 +105,20 @@ async function mark(ref: DocumentReference, patch: Partial<DiscordOutboxItem>): 
 }
 
 export const discordDeliver = onDocumentCreated(
-  { document: "discordOutbox/{id}", secrets: [DISCORD_WEBHOOK_URL], retry: false },
+  { document: "servers/{serverId}/discordOutbox/{id}", retry: false },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
     const item = snap.data() as DiscordOutboxItem;
     if (item.status !== "pending") return;
     if (await inMaintenance()) return;
-    const cfg = mergeConfig((await refs.config().get()).data());
-    const url = webhookUrl();
+    const serverId = event.params.serverId;
+    if (!isServerCode(serverId)) return;
+    const R = refs(serverId);
+    const server = (await R.server().get()).data();
+    const cfg = mergeConfig((await R.config().get()).data());
+    // Archived servers and servers without their own webhook post nothing (never another server's).
+    const url = server?.status === "active" ? await webhookUrl(R) : null;
     if (!url || cfg.discordEnabled !== 1) {
       await mark(snap.ref, { status: "skipped" });
       return;
@@ -127,9 +126,9 @@ export const discordDeliver = onDocumentCreated(
     if (item.priority === "normal") {
       const now = Date.now();
       const allowed = await db.runTransaction(async (tx) => {
-        const rate = await tx.get(rateRef());
-        const d = rateDecision(rate.data(), now, cfg.discordMaxPerHour);
-        if (d.allow) tx.set(rateRef(), d.next);
+        const rate = await tx.get(R.discordRate());
+        const d = rateDecision(rate.data() as DiscordRateState | undefined, now, cfg.discordMaxPerHour);
+        if (d.allow) tx.set(R.discordRate(), d.next);
         return d.allow;
       });
       if (!allowed) {
@@ -137,29 +136,29 @@ export const discordDeliver = onDocumentCreated(
         return;
       }
     }
-    const res = await post(url, item.message, item.createdAt);
+    const res = await post(R, url, item.message, item.createdAt);
     if (res.ok) {
       await mark(snap.ref, { status: "sent", sentAt: Date.now() });
     } else if (res.status === 429 && item.priority === "normal") {
       // Discord's own rate limit: fold it into the next digest.
       await mark(snap.ref, { status: "queued" });
     } else {
-      logger.warn("Discord post failed", { id: item.id, kind: item.kind, status: res.status, error: res.error });
+      logger.warn("Discord post failed", { serverId, id: item.id, kind: item.kind, status: res.status, error: res.error });
       await mark(snap.ref, { status: "failed", error: res.error });
     }
   },
 );
 
-/** Post everything the rate limit held back as one message. */
-export async function flushDigest(): Promise<{ sent: number; skipped?: string }> {
-  const url = webhookUrl();
-  if (!url) return { sent: 0, skipped: "DISCORD_WEBHOOK_URL isn't set." };
-  const cfg = mergeConfig((await refs.config().get()).data());
+/** Post everything the rate limit held back in one server as one message. */
+export async function flushDigest(R: Refs): Promise<{ sent: number; skipped?: string }> {
+  const url = await webhookUrl(R);
+  if (!url) return { sent: 0, skipped: "No Discord webhook is set." };
+  const cfg = mergeConfig((await R.config().get()).data());
   if (cfg.discordEnabled !== 1) return { sent: 0, skipped: "Discord posts are turned off in config." };
-  const snap = await outbox().where("status", "==", "queued").limit(200).get();
+  const snap = await R.outbox().where("status", "==", "queued").limit(200).get();
   if (snap.empty) return { sent: 0 };
   const docs = [...snap.docs].sort((a, b) => (a.data() as DiscordOutboxItem).createdAt - (b.data() as DiscordOutboxItem).createdAt);
-  const res = await post(url, digestMessage(docs.map((d) => (d.data() as DiscordOutboxItem).message)), Date.now());
+  const res = await post(R, url, digestMessage(docs.map((d) => (d.data() as DiscordOutboxItem).message)), Date.now());
   if (!res.ok) throw new HttpsError("unavailable", `Discord said no: ${res.status ?? ""} ${res.error}`.trim());
   const batch = db.batch();
   for (const d of docs) batch.update(d.ref, { status: "digested", sentAt: Date.now() });
@@ -167,32 +166,61 @@ export async function flushDigest(): Promise<{ sent: number; skipped?: string }>
   return { sent: docs.length };
 }
 
-export const discordDigest = onSchedule({ schedule: "every 60 minutes", secrets: [DISCORD_WEBHOOK_URL] }, async () => {
+/** Hourly: one digest per ACTIVE server, each to its own webhook. One failing server never blocks the others. */
+export const discordDigest = onSchedule({ schedule: "every 60 minutes" }, async () => {
   if (await inMaintenance()) return;
-  const res = await flushDigest();
-  if (res.sent) logger.info("Discord digest sent", res);
+  const servers = await globalRefs.servers().where("status", "==", "active").get();
+  for (const s of servers.docs) {
+    try {
+      const res = await flushDigest(refs(s.id));
+      if (res.sent) logger.info("Discord digest sent", { serverId: s.id, ...res });
+    } catch (err) {
+      logger.error("Discord digest failed", { serverId: s.id, err });
+    }
+  }
 });
 
-/** Admin: post the digest now instead of waiting for the hourly run. */
-export const sendDiscordDigest = gameCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
-  await requireAdmin(req);
-  return flushDigest();
+/** Admin: post this server's digest now instead of waiting for the hourly run. */
+export const sendDiscordDigest = gameCall(async (req) => {
+  const { R } = await gameCtx(req, { admin: true });
+  return flushDigest(R);
 });
 
-/** Admin: post a test message straight to the webhook and report what Discord said. */
-export const testDiscord = gameCall({ secrets: [DISCORD_WEBHOOK_URL] }, async (req) => {
-  const adminId = await requireAdmin(req);
-  const url = webhookUrl();
-  if (!url) return { ok: false, error: "DISCORD_WEBHOOK_URL isn't set, or isn't a Discord webhook URL." };
-  const res = await post(url, testMessage(adminId), Date.now());
-  await auditRef().set(auditEntry(adminId, "testDiscord", null, { ok: res.ok }, Date.now()));
+/** Admin: post a test message straight to this server's webhook and report what Discord said. */
+export const testDiscord = gameCall(async (req) => {
+  const { uid: adminId, serverId, R } = await gameCtx(req, { admin: true });
+  const url = await webhookUrl(R);
+  if (!url) return { ok: false, error: "No Discord webhook is set for this server." };
+  const res = await post(R, url, testMessage(adminId), Date.now());
+  await auditRef().set(auditEntry(adminId, "testDiscord", null, { ok: res.ok }, Date.now(), serverId));
   return res.ok ? { ok: true } : { ok: false, error: `${res.status ?? "network"}: ${res.error}` };
 });
 
-/** Link (or unlink with null) your Discord user ID so posts can @mention you. */
+/**
+ * Admin: set (or clear with an empty url) a server's Discord webhook. Written
+ * to a server-only doc; the URL is never returned or readable by clients.
+ * `servers/{id}.hasDiscordWebhook` is the only thing the UI can see.
+ */
+export const setDiscordWebhook = gameCall(async (req) => {
+  const { uid: adminId, serverId, R, data } = await gameCtx(req, { admin: true });
+  const raw = data.url;
+  if (raw !== undefined && raw !== null && typeof raw !== "string") throw new HttpsError("invalid-argument", "url must be a string.");
+  const url = (raw ?? "").trim();
+  if (url && !isAllowedWebhookUrl(url)) throw new HttpsError("invalid-argument", "That isn't a Discord webhook URL (discord.com/api/webhooks/...).");
+  const now = Date.now();
+  const batch = db.batch();
+  if (url) batch.set(R.privateDiscord(), { webhookUrl: url, updatedAt: now });
+  else batch.delete(R.privateDiscord());
+  batch.update(R.server(), { hasDiscordWebhook: Boolean(url) });
+  batch.set(auditRef(), auditEntry(adminId, "setDiscordWebhook", null, { set: Boolean(url) }, now, serverId));
+  await batch.commit();
+  return { ok: true, set: Boolean(url) };
+});
+
+/** Link (or unlink with null) your Discord user ID so posts can @mention you (per server). */
 export const setDiscordId = gameCall(async (req) => {
-  const uid = requireAuth(req);
-  const raw = asObject(req.data).discordId;
+  const { uid, R, data } = await gameCtx(req);
+  const raw = data.discordId;
   let discordId: string | null = null;
   if (raw !== null && raw !== undefined && raw !== "") {
     if (typeof raw !== "string" || !DISCORD_ID_RE.test(raw.trim())) {
@@ -201,13 +229,13 @@ export const setDiscordId = gameCall(async (req) => {
     discordId = raw.trim();
   }
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(refs.player(uid));
+    const snap = await tx.get(R.player(uid));
     if (!snap.exists) throw new HttpsError("not-found", "You're not an approved player.");
     if (discordId) {
-      const clash = await tx.get(db.collection("players").where("discordId", "==", discordId));
+      const clash = await tx.get(R.col("players").where("discordId", "==", discordId));
       if (clash.docs.some((d) => d.id !== uid)) throw new HttpsError("already-exists", "Another player has linked that Discord account.");
     }
-    tx.update(refs.player(uid), { discordId: discordId ?? FieldValue.delete() });
+    tx.update(R.player(uid), { discordId: discordId ?? FieldValue.delete() });
   });
   return { ok: true, discordId };
 });

@@ -10,7 +10,7 @@
 
 ## 1. What this is
 
-A play-money social trading game for a small friend group (10–20 people). Every
+A play-money social trading game for small friend groups (10–20 people each). The owner can run several independent games ("servers", §11) on one site; nothing crosses between them. Everything below describes ONE server unless it says otherwise. Every
 player is simultaneously a **trader** and a **tradable stock** named after
 themselves. Players trade each other's stock against a constant-product AMM;
 **prices move only from trades** — never from a system judgement of news. A
@@ -40,7 +40,7 @@ stock-game/
 ├── firestore.rules        All client writes denied; reads gated by membership.
 ├── firestore.indexes.json Composite indexes for the feed/portfolio queries.
 ├── firebase.json          Firestore + functions config, emulator ports.
-├── scripts/               ensure-test-secret.mjs (integration test setup).
+├── scripts/               migrate-to-servers.mjs + delete-legacy.mjs (one-off migration, §11.5), generate-icons.mjs.
 ├── .github/workflows/     Pages deploy (tests first).
 └── docs/                  This file + operational guides.
 ```
@@ -79,6 +79,7 @@ everywhere so the same types work on server, client and in stored reports.
 | `recap.ts` | `Recap`/`TouchResult` shapes, `recapTraders`. |
 | `alerts.ts` | `validateAlert`, `alertFires`, `alertSummary`. |
 | `schedule.ts` | The close time lives in `meta/state.closesAt`. `advanceClosesAt` (+7 days from the previous close, then whole weeks until it's in the future), `effectiveClosesAt` / `legacyClosesAt` (state from before `closesAt`: next Sunday 20:00 UTC, or a just-missed slot the old cron still owed), `closeTimeError` (admin input: ≥5 minutes ahead, ≤1 year), `nextScheduledClose` (countdown; `due` between `closesAt` and the scheduler running), `formatCloseTime` (Europe/London), `formatCountdown`. |
+| `servers.ts` | Multi-server support: `ServerDoc`/`UserDoc`, the server-code format (`SERVER_CODE_RE` = `^[1-9][0-9]{5}$`, `isServerCode`), `randomServerCode`/`claimServerCode` (generator with collision retry), `serverPaths(serverId)` (every Firestore path of a server), `SERVER_COLLECTIONS`, `resolveServer` (the landing decision: `?s=` → only membership → last-used → picker), `serverUiVisible` (two or more memberships) and `withServer` (adds `?s=` to an href). |
 | `types.ts` | Every Firestore document shape (the data model). |
 
 ### 3.1 The AMM (`amm.ts`)
@@ -210,21 +211,30 @@ Now only reached from a forced liquidation (no longer from `closeShort`).
 
 ## 4. Data model (`shared/src/types.ts` → Firestore)
 
-All documents live at the paths below. IDs and relationships:
+Global collections (`registrations`, `admins`, `devlog`, `auditLog`, `users`, `servers`, `system`) are top-level. **Every other collection in this table lives under `servers/{code}/`** (e.g. `servers/482915/players/{uid}`); the paths below omit that prefix for brevity. `shared/src/servers.ts` `serverPaths(serverId)` is the one place paths are built. IDs and relationships:
 
 | Collection | Doc id | Key fields |
 |---|---|---|
-| `config/global` | fixed | All of `GameConfig` (see §4.1). Readable by any signed-in user. |
-| `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. |
+| `servers/{code}` | 6-digit code | `ServerDoc`: `slug` (= id), `name` (editable; the code never changes), `status` (`active`/`archived`), `createdAt`, `closesAt` (denormalised copy of `meta/state.closesAt`, kept in the same transaction, so the scheduler finds due servers with one query), `hasDiscordWebhook` (the only thing the UI can see about the webhook), optional `maintenance`, optional `migration {source:"legacy", status, completedAt}` on the migrated first server. Readable by that server's members and admins. |
+| `servers/{code}/private/discord` | fixed | `{ webhookUrl }`. **Server-only**: no client can read it, even an admin. Written by `setDiscordWebhook`. |
+| `users/{uid}` | auth uid | `{ serverIds }`: a lookup cache maintained by functions with `arrayUnion`/`arrayRemove`. Membership is *defined* by `servers/{code}/players/{uid}`; rules never trust this. Own doc readable. |
+| `system/maintenance` | fixed | `{ enabled }`, the global kill switch (§11.4). Signed-in users read it (for the banner). |
+
+Per-server collections:
+
+| Collection | Doc id | Key fields |
+|---|---|---|
+| `config/global` | fixed | All of `GameConfig` (see §4.1). Readable by the server's members (and admins). |
+| `content/global` | fixed | `SiteContent` { rules, changelog, updatedAt }. A new server starts with an empty `rules`, shown as the default rules until edited. |
 | `meta/state` | fixed | `GameState`: `currentWeek` (from 1), `prizePool`, `weekFees`, `weekStartedAt`, `lastCloseAt`, `closesAt` (epoch ms the current week closes; admin-set via `setCloseTime`, advanced by whole weeks after each close at/after it; derived once from the old Sunday 20:00 UTC schedule and persisted by `closeScheduler`/`touch` if absent), `avgNetWorth` (set at each close and listing; the Discord "big trade" yardstick). |
-| `players/{uid}` | auth uid | `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session, optional `marginWarnedAt` and `marginCall {calledAt, deadline, shortfall, coverCost}` (§3.4). |
-| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. `lastTrade {by, at, week}` is written by every trade/short/forced sale (`applyPool`) and is what `onStockTraded` keys on. |
+| `players/{uid}` | auth uid | One per (user, server): the same person has a separate player, cash, stock, ticker and display name in each server they belong to. `displayName`, `cash`, `joinWeek`, `isActive`, `isIdle`, `lastActiveAt`, `createdAt`, `startingCash`, `totalAllowances`, `totalBonus`, `netWorthWeekStart`, optional `lastPostAt`, optional `bankruptAt`, optional `discordId` (snowflake, for @mentions; per server, so mentions only resolve in the server that sent them), optional `seenSnapshot` `{at, netWorth, rank, week}` written by `touch` each session, optional `marginWarnedAt` and `marginCall {calledAt, deadline, shortfall, coverCost}` (§3.4). |
+| `stocks/{uid}` | == ownerId | `price`, `poolCash`, `poolShares`, `k`, `listed`, `listPrice`, `listedAt`, `listedWeek`, `weekOpenPrice`/`weekHigh`/`weekLow`/`weekTradeCount`, optional `delistedAt`, `ticker` (unique within the server, 2–5 letters; absent on pre-ticker stocks until backfilled — always read via `assignTickers`/`tickerOf`), optional `tickerChangedAt`, `allTimeHigh`/`allTimeLow`, `athAnnouncedWeek`/`atlAnnouncedWeek` (all maintained by `priceTick`). Older stocks may still carry a stale `recentPrices` list; the next weekly close deletes it. `lastTrade {by, at, week}` is written by every trade/short/forced sale (`applyPool`) and is what `onStockTraded` keys on. |
 | `holdings/{uid}_{stockId}` | composite | `uid`, `stockId`, `shares`, `updatedAt`, `costBasis` (average cost, fees included), `holdingSince` (first buy, reset by any sell). Flat (not nested) so "all holders of a stock" is one query. Pre-award holdings lack the last two until their next trade or close rebuilds them from trades (`legacyHoldingStats`). |
 | `shorts/{id}` | auto | `ownerId/Name`, `stockId/Name`, `shares`, `status` (open/closed), `openPrice`, `openProceeds`, `openedAt`, `openWeek`, `borrowFeesPaid`, and on close `closePrice`/`closeCost`/`realisedPnl`/`closedAt`/`closeWeek`. |
 | `trades/{id}` | auto | `traderId/Name`, `stockId/Name`, `side`, `cashAmount` (gross), `netCash` (wallet delta, negative for buys), `shares`, `fee`, `priceBefore/After`, `week`, `createdAt`, optional `linkedPostId`, optional `kind` (`openShort`/`closeShort`/`liquidation` = a forced sale, which counts as a sell for positions), optional `forced` (a short buy-back made by forced liquidation), optional deprecated `recentPrices` (only on trades from before the feed sparkline was removed; no longer written). |
 | `posts/{id}` | auto | `authorId/Name` ("system"/"Market" for system posts), `taggedStockId/Name`, `text`, `linkedTradeId`, `linkedTradeSummary`, `reactions` (type→uid[]), `reactionCount`, `system`, `week`, `createdAt`. |
 | `photos/{uid}` | auth uid | `dataUrl`, `updatedAt`. Separate from the stock doc so price ticks don't resend image bytes. |
-| `devlog/{id}` | auto | `DevlogEntry`: `title`, `body` (same markup as Rules), `date` (noon UTC of the shown day), `createdAt`, `updatedAt`. Readable by anyone signed in; kept by a reset. |
+| `devlog/{id}` | auto | **Global.** `DevlogEntry`: `title`, `body` (same markup as Rules), `date` (noon UTC of the shown day), `createdAt`, `updatedAt`. Readable by anyone signed in; kept by a reset. |
 | `alerts/{id}` | auto | `PriceAlert`: `uid`, `stockId/Name`, `direction` (above/below), `price`, `discord`, `status` (active/triggered/cancelled), `createdAt`, `triggeredAt/Price`. Owner-only reads. |
 | `notifications/{id}` | auto | `AppNotification`: `uid`, `kind` ("alert" / "margin"), `title`, `body`, `stockId`, optional `link` (e.g. `/portfolio/#margin`), `createdAt`, `read`. Owner-only reads. |
 | `discordOutbox/{id}` | auto | `DiscordOutboxItem`: `priority` (high/normal), `kind`, `message` (`DiscordMessage` with `{@uid}` tokens), `status` (pending → sent/queued/digested/failed/skipped). Server-only. |
@@ -232,9 +242,9 @@ All documents live at the paths below. IDs and relationships:
 | `netWorthHistory/{uid}` | auth uid | `points[]` of `{week, t, v}`, one appended per weekly close, capped to 104. Kept as-is for older chart ranges. |
 | `netWorthSeries/{uid}_{week}` | uid + week | `NetWorthSeries`: `uid`, `week`, `points[]` of `{t, v}`, `openSince`, `updatedAt`. A point whenever the player's net worth changes (written by `onStockTraded`; the close appends its final value). Coalesced per `netWorthTickMinutes` (the trailing point is overwritten inside the window), capped at 500 by thinning the older half. One doc per week, so closed weeks are never rewritten. Members can read (same as `netWorthHistory`). |
 | `weeklyReports/week-NNNN` | zero-padded week | Full `WeeklyReport` payload + rendered `markdown`. |
-| `registrations/{uid}` | auth uid | `displayName`, `email`, `status` (pending/approved/rejected), `createdAt`, `decidedAt/By` (+ a `displayNameLower` for uniqueness). |
-| `admins/{uid}` | auth uid | Existence = admin. Created manually in the console. |
-| `auditLog/{id}` | auto | `actorId`, `action`, `targetId`, `details`, `createdAt`. |
+| `registrations/{uid}` | auth uid | **Global.** `displayName`, `email`, `status` (pending/approved/rejected), `createdAt`, `decidedAt/By`. One per account. Name uniqueness is no longer checked here: it is checked per server at approval. (Older docs still carry a `displayNameLower`.) |
+| `admins/{uid}` | auth uid | **Global.** Existence = admin (of every server; there are no per-server admins). Created manually in the console. |
+| `auditLog/{id}` | auto | **Global.** `actorId`, `action`, `targetId`, `details`, `createdAt`, and `serverId` on entries that concern one server. |
 
 Reaction types: `like 👍`, `laugh 😂`, `wow 😮`, `down 👎`. Reactions are purely
 social and never affect price.
@@ -284,47 +294,50 @@ the next `updateConfig` drops it.
 ## 5. `functions/` — Cloud Functions (`functions/src/`)
 
 Firebase Functions v2, region `europe-west2`, `maxInstances: 5`. Every function
-is `onCall` (callable, checks `request.auth`) except the Firestore triggers and
+is `onCall` (callable, checks `request.auth`; the mutating ones via `gameCall`) except the Firestore triggers and
 the two scheduled functions (`discordDigest`, `closeScheduler`; Cloud Scheduler
-gives 3 free jobs per billing account, don't add a third). There is no public
+gives 3 free jobs per billing account, don't add a third; both iterate servers instead of adding jobs). There is no public
 HTTPS endpoint.
 
 `common.ts` holds the shared infrastructure: region/instance limits, Admin SDK
-init, typed document `refs`, `readConfig`/`readState`/`readWorld`, auth helpers
-(`requireAuth`, `isAdmin`, `requireAdmin`), argument validators, and audit-log
-helpers.
+init, `refs(serverId)` (typed refs for ONE server; `R.col(name)`/`R.doc(path)` for the rest) and `globalRefs`, `readConfig`/`readState`/`readWorld` (take the server's `R`), auth helpers (`requireAuth`, `isAdmin`, `requireAdmin`), `parseServerId` (validates `^[1-9][0-9]{5}$`), `requireServer(serverId, {mutating})` (exists, and active/not in maintenance for mutations), `requireMember(serverId, uid)` (has a player doc there), `gameCtx(req, {admin?, allowAdmin?, readOnly?})` (the standard preamble of every server-scoped callable: signed in, valid `serverId`, **authorise first** so a stranger can't probe which codes exist, then server active) and `gameCall(...)` (an `onCall` that refuses signed-in calls during maintenance mode), argument validators, and audit-log helpers (`auditEntry(..., serverId)`).
 
-**Deployed surface (`index.ts`):**
+**Deployed surface (`index.ts`).** Every game callable takes a validated `serverId` (not repeated in the table). Reset, rename, delist, close and config only ever touch the named server. Errors a player can see never use the words "server" or "group".
 
 | Function | File | Access | What it does |
 |---|---|---|---|
-| `register` | approval.ts | signed-in | Request to join (name uniqueness check); writes a pending registration. No funds. |
-| `approvePlayer` | approval.ts | admin | Atomically creates the Player (with catch-up `startingCash`), creates a listed Stock at `listingPrice` with a default unique `ticker`, sizes the pool via `listingPool` (avg net worth incl. the newcomer), backfills legacy tickers, posts a system listing message, audits. |
+| `register` | approval.ts | signed-in | **Global.** Request to join; writes a pending registration (one per account). No server, no name check, no funds. |
+| `approvePlayer` `{uid, serverId}` | approval.ts | admin | The admin chooses the server. Atomically creates the Player (catch-up `startingCash` from *that server's* week), creates a listed Stock at that server's `listingPrice` with a default ticker unique *within the server*, sizes the pool via `listingPool` (that server's avg net worth incl. the newcomer), backfills legacy tickers, posts a system listing message there, adds the server to `users.serverIds`, audits. The display name must be unique within the server (case-insensitive; checked here, not at registration). Shares one code path (`placePlayer`) with `addPlayerToServer`. |
+| `addPlayerToServer` `{uid, serverId, displayName?}` | approval.ts | admin | Adds an already-approved user to another server (separate player, cash, stock, ticker; optional different display name). This is how the owner joins server 2. |
+| `createServer` `{name, closesAt, copyConfigFrom?}` | servers.ts | admin | Generates the 6-digit code (`claimServerCode`, a create-only batch write that retries with a new code on collision), copies `copyConfigFrom`'s config or `DEFAULT_CONFIG`, initialises state at week 1 with the supplied `closesAt`, an empty rules doc, no webhook. Returns the code. |
+| `archiveServer` / `unarchiveServer` / `renameServer` | servers.ts | admin | Archived = read-only: every mutating callable rejects, the scheduler, digest and Discord skip it. Rename changes the display name only. |
+| `setMaintenance` `{enabled}` | adminOps.ts | admin | Global kill switch (§11.4). Plain `onCall`, so it can always be switched off. |
+| `setDiscordWebhook` `{serverId, url}` | discord.ts | admin | Validates a `discord.com/api/webhooks/` URL (or localhost inside the emulator), writes `servers/{id}/private/discord`, sets `hasDiscordWebhook`, audits. Never returns the URL. Empty `url` clears it. |
 | `setTicker` | ticker.ts | player / admin | Change your own ticker (unique across all stocks, `tickerChangeCooldownHours`); admins may change anyone's (no cooldown, audited). Backfills legacy tickers; posts "X now trades as $NEW (was $OLD)". |
-| `rejectPlayer` | approval.ts | admin | Marks a registration rejected. |
+| `rejectPlayer` | approval.ts | admin | **Global.** Marks a registration rejected. |
 | `trade` | trading.ts | player | Buy (spend cash, fee off the top) or sell (shares). Updates wallet + holding, applies the pool, adds fee to prize pool + week fees, writes the Trade and an optional linked Post. |
 | `openShort` / `closeShort` | shorts.ts | player | Open/close a synthetic short; enforces the exposure cap; fee → prize pool. An unaffordable close fails with `failed-precondition` + `details.shortfall` (no settlement). |
 | `createPost` / `toggleReaction` / `deletePost` | social.ts | player / player / admin | Standalone/tagged/trade-linked posts (cooldown + length limits), toggle a reaction, admin moderation (keeps text in the audit log). |
 | `touch` | recap.ts | player | Once per page load: records activity, silently reactivates idle players (no back-pay), writes `seenSnapshot` (net worth + rank via `computeStandings`), returns the previous snapshot and, after `recapAfterHours`, a `Recap`. |
-| `discordDeliver` | discord.ts | Firestore trigger | On `discordOutbox` create: skip if disabled/no secret; `high` posts now; `normal` goes through `rateDecision` (hourly bucket in `discordState/rate`) or is `queued`. Resolves `{@uid}` tokens to `<@discordId>` at send time. |
-| `discordDigest` / `sendDiscordDigest` | discord.ts | hourly schedule / admin | Posts all `queued` items as one digest (no pings), marks them `digested`. |
-| `testDiscord` | discord.ts | admin | Posts a test message straight to the webhook and reports Discord's answer. |
+| `discordDeliver` | discord.ts | Firestore trigger | On `servers/{serverId}/discordOutbox/{id}` create: marks the item `skipped` if the server is archived, Discord is off, or **that server has no webhook (never another server's)**; `high` posts now; `normal` goes through `rateDecision` (hourly bucket in `discordState/rate`) or is `queued`. Resolves `{@uid}` tokens to `<@discordId>` at send time. |
+| `discordDigest` / `sendDiscordDigest` | discord.ts | hourly schedule / admin | Posts a server's `queued` items as one digest (no pings), marks them `digested`. The hourly job loops over *active* servers, each to its own webhook and rate state; one failing server doesn't block the others. |
+| `testDiscord` | discord.ts | admin | Posts a test message straight to that server's webhook and reports Discord's answer. |
 | `setDiscordId` | discord.ts | player | Link/unlink your Discord user ID (17–20 digits, unique across players). |
 | `createAlert` / `cancelAlert` | alerts.ts | player | Price alerts (`validateAlert`, capped at `maxActiveAlerts`). |
-| `checkPriceAlerts` | alerts.ts | Firestore trigger | On `stocks/{id}` update with a price change: fires due alerts once each (per-alert transaction), writes a notification, optionally queues a high-priority Discord @mention. |
+| `checkPriceAlerts` | alerts.ts | Firestore trigger | On `servers/{serverId}/stocks/{id}` update with a price change: fires due alerts once each (per-alert transaction), writes a notification, optionally queues a high-priority Discord @mention. |
 | `markNotificationsRead` | alerts.ts | player | Marks some or all of your notifications read. |
-| `onStockTraded` | netWorth.ts | Firestore trigger | On `stocks/{id}` update **only when `lastTrade` changed** (every trade, short open/close and forced sale writes `lastTrade {by, at, week}`; weekly-close bookkeeping and ticker edits don't). Loads the affected players (holders of the stock, players short it, the trader) and what their net worth depends on, records a series point per player in its own transaction, then re-evaluates margin for those with open shorts or margin flags (`reevaluateMargin`, 1 read each, writes only on a transition). **Never writes `stocks/*`** (it would retrigger itself). See §5.2 for the read budget. |
+| `onStockTraded` | netWorth.ts | Firestore trigger | On `servers/{serverId}/stocks/{id}` update **only when `lastTrade` changed** (every trade, short open/close and forced sale writes `lastTrade {by, at, week}`; weekly-close bookkeeping and ticker edits don't). Loads the affected players (holders of the stock, players short it, the trader) and what their net worth depends on, records a series point per player in its own transaction, then re-evaluates margin for those with open shorts or margin flags (`reevaluateMargin`, 1 read each, writes only on a transition). **Never writes `stocks/*`** (it would retrigger itself). See §5.2 for the read budget. |
 | `updateConfig` | adminOps.ts | admin | Validates and merges a config patch; audits before/after. |
 | `delistPlayer` | adminOps.ts | admin | Pays every holder out at the last price, unlists the stock, deactivates the account, system post, audit. |
 | `runWeeklyClose` | adminOps.ts | admin | Manual close via `closeWeek` with an `expectedWeek` guard against double-clicks. Before `closesAt` it leaves `closesAt` unchanged. |
 | `setCloseTime` | closeSchedule.ts | admin | Sets `meta/state.closesAt` (`closeTimeError`: ≥5 min ahead), audits before/after, posts "Week N now closes … UK time (was …)" to the feed and Discord. |
-| `closeScheduler` | closeSchedule.ts | every minute | Reads `meta/state` (1 read); if `now ≥ closesAt` calls `closeWeek` (`trigger: "schedule"`, `expectedWeek` = the week it read) — the transaction re-checks both, so overlapping ticks can't double-close. Persists a legacy-derived `closesAt` if missing. Then `players where marginCall.deadline <= now` (1 read when empty) → `forceLiquidate` each, one transaction per player. `retryCount: 0`. ≈2 reads/minute when idle. |
+| `closeScheduler` | closeSchedule.ts | every minute | One query: `servers where status == "active" and closesAt <= now` (1 read when nothing is due). For each due server it calls `closeWeek(R, …)` (`trigger: "schedule"`, `expectedWeek` = the week it read); the transaction re-checks both, so overlapping ticks can't double-close, and other servers are never touched. Persists a legacy-derived `closesAt` if missing. Then a **collection-group** query `players where marginCall.deadline <= now` (1 read when empty; needs the collection-group index override) spanning every server → `forceLiquidate` each in its own server, one transaction per player, skipping archived servers (and the legacy top-level `players`). `retryCount: 0`. ≈2 reads/minute when idle, independent of the number of servers. |
 | `setStockPhoto` | photo.ts | player / admin | Set/remove your own avatar (validated); admins may only remove others'. |
-| `renamePlayer` | rename.ts | admin | Renames player/stock/registration, then rewrites denormalised names across past trades/posts via a bulkWriter. |
-| `updateContent` | content.ts | admin | Patches the Rules markdown on `content/global` (the legacy `changelog` field is still accepted but no longer edited in the UI). |
-| `saveDevlogEntry` / `deleteDevlogEntry` | content.ts | admin | Create/edit (pass `id`) or delete a dev diary entry (`validateDevlogEntry`); deletes keep the text in the audit log. |
+| `renamePlayer` | rename.ts | admin | Renames the player and stock **in that server only** (the account-wide registration is untouched), unique within the server, then rewrites denormalised names across that server's past trades/posts via a bulkWriter. |
+| `updateContent` | content.ts | admin | Patches the Rules markdown on the server's `content/global` (the legacy `changelog` field is still accepted but no longer edited in the UI). |
+| `saveDevlogEntry` / `deleteDevlogEntry` | content.ts | admin (global) | Create/edit (pass `id`) or delete a dev diary entry (`validateDevlogEntry`); deletes keep the text in the audit log. |
 | `importDevlog` | content.ts | admin | Splits the built-in `DEFAULT_CHANGELOG` (one entry per `# ` heading, optional `Date:` line) into `devlog` entries; skips titles that already exist. |
-| `resetGame` | reset.ts | admin | Wipe-to-day-one (see §9 and the README). Not a single transaction. |
+| `resetGame` | reset.ts | admin | Wipe ONE server to day one (see §9 and the README). Keeps the server doc, config and webhook. Wiped players are removed from `users.serverIds`; registrations are re-queued only for people who now belong to no server. Not a single transaction. |
 
 ### 5.1 Weekly close ordering (`weeklyClose.ts`)
 
@@ -391,13 +404,14 @@ Firestore live and writes only through callable functions.
 - `passwordReset.ts` — `sendPasswordReset(email)` (Firebase `sendPasswordResetEmail`, default template/sender, continue URL back to the site, retried without it if the domain isn't authorised) and `resetResultForError` (unknown/disabled accounts look like success; rate limits get a friendly message). Used by `SignIn` ("Forgot password?") and the account menu ("Change password", email/password accounts only, sends to your own address so no re-auth is needed).
 
 **Context & chrome**
-- `components/GameProvider.tsx` — the data backbone. Tracks auth +
-  registration/admin/player membership; when a member, live-subscribes to
+- `components/ServerProvider.tsx` — the outer provider: auth, `registrations/{uid}`, `admins/{uid}`, `users/{uid}` (the memberships), and `useServer()`: resolves the current server with `resolveServer` (`?s=` → the only membership → this device's last-used server → picker), exposes `serverId`, `serverParam` (what goes in `?s=`: null for single-membership users, so no link carries it), `showServerUi` (two or more memberships) and `switchServer`.
+- `components/GameRoot.tsx` — mounts `<GameProvider key={serverId}>` + `Shell`, so a server change **unmounts the whole game tree**: every subscription is torn down and re-created and no cached state from one server can render under another.
+- `components/GameProvider.tsx` — the data backbone for ONE server (`serverId` prop, all paths via `serverPaths`/`usePaths()`). Tracks the player's membership in that server; when a member, live-subscribes to
   stocks, players, holdings, photos, the user's open shorts, state and config;
   derives `PlayerView` (net worth, holdings value, score); calls `api.touch()`
   once per session. `useGame()` exposes it all.
 - `components/Shell.tsx` — gatekeeping: not configured → setup notice; signed
-  out → `SignIn`; not approved → `Registration`; otherwise the chrome + page.
+  out → `SignIn`; two or more memberships and no server chosen → `ServerPicker`; no membership → `Registration` (or, for the admin with no server yet, just the Admin page); otherwise the chrome + page. The server name in the top bar, and the banner for an ended (archived) game, are the only chrome that mentions a server, and the name shows only for people in two or more.
   Nav: Feed, Market, Portfolio, Leaderboard, Reports (+ Admin). The sticky
   `.chrome` holds the top bar and the `MarketStrip`. At ≤600px the top nav is
   hidden and a fixed bottom tab bar (`.tabbar`, icons in `NavIcons.tsx`,
@@ -414,6 +428,7 @@ Firestore live and writes only through callable functions.
   scrolling ticker tape of every listed stock (ticker, price, ▲/▼ week change,
   flashes on live price moves). The tape pauses on hover/focus; under reduced
   motion it is a static swipeable row.
+- `components/ServerLink.tsx` — the only way the app links to its own pages: a `Link` wrapper that adds `?s=` via `serverHref()` (`lib/format.ts`) only when `serverParam` is set, plus `useServerHref`/`useServerRouter` for programmatic navigation. `web/test/hrefs.test.ts` fails if anything else uses `next/link` or `useRouter`, builds `?s=` by hand, or names a game collection without `serverPaths`.
 - `components/AccountMenu.tsx` — avatar dropdown in the top bar (after
   easyui's origin-dropdown): name/email, cash, net worth, week, then My stock,
   Rules, Dev diary (with a dot on the avatar and menu item while the latest
@@ -421,9 +436,9 @@ Firestore live and writes only through callable functions.
   Sounds as `menuitemcheckbox`), Change password (emails a reset link; toast
   confirms), and Sign out. While margin called, a red "Margin call: raise £Y"
   item at the top links to `/portfolio/#margin`. This is where future account
-  options should go. Full menu-button keyboard support (arrows, Home/End, Esc
+  options should go. A **Switch server** section (radio items; current one marked) appears only with two or more memberships. Full menu-button keyboard support (arrows, Home/End, Esc
   returns focus, Tab closes).
-- **Session + moments.** `GameProvider` keeps `touch`'s `recap` and `previousSession` in sessionStorage (a reload's second touch would only see this session). `RecapCard` sits at the top of `<main>` until dismissed. `Moments` shows `ResultsModal` for the latest close if it happened since your previous session and this device hasn't shown it (`fsm:resultsSeen:<uid>`), and fires confetti + a banner when your rank becomes 1 (compared with your last session, then live; it waits 2s after `marketReady` so load-order flicker can't trigger it). `NotificationBell` (top bar) lists your notifications and toasts new ones.
+- **Session + moments.** `GameProvider` keeps `touch`'s `recap` and `previousSession` in sessionStorage (all per-server client storage keys are namespaced by server id in `lib/serverStore.ts` `storageKey`: recap, previous session, `fsm:resultsSeen:<server>:<uid>`, the view-as-player flag; theme, sound and the dev diary "unread" marker stay global) (a reload's second touch would only see this session). `RecapCard` sits at the top of `<main>` until dismissed. `Moments` shows `ResultsModal` for the latest close if it happened since your previous session and this device hasn't shown it (`fsm:resultsSeen:<uid>`), and fires confetti + a banner when your rank becomes 1 (compared with your last session, then live; it waits 2s after `marketReady` so load-order flicker can't trigger it). `NotificationBell` (top bar) lists your notifications and toasts new ones.
 - **Preferences** (`lib/prefs.ts`) are per-device in localStorage, never in
   Firestore. Theme sets `<html data-theme>`; `THEME_BOOT_SCRIPT` (inlined in
   the layout `<head>`) applies it before first paint, and `ClientEffects`
@@ -436,12 +451,12 @@ Firestore live and writes only through callable functions.
   `app/apple-icon.png` (regenerate with `node scripts/generate-icons.mjs`), and
   `public/sw.js` (cache-first for hashed `/_next/static/`, network-first for
   pages, ignores cross-origin Firebase traffic). `ClientEffects` registers it
-  in production builds only. Bump `VERSION` in `sw.js` to drop old caches.
+  in production builds only. Bump `VERSION` in `sw.js` to drop old caches (now `v2`, for the server release). The manifest `start_url` stays `/`.
 
 **Routes (`app/`)**
 | Path | Screen |
 |---|---|
-| `/` | Feed: prize-pool pill, post composer, global chronological feed. |
+| `/` | Feed: prize-pool pill, post composer, chronological feed of the current server. With several memberships and no `?s=`/last-used server it is the **server picker** instead (the Shell shows the picker on every route in that case). |
 | `/market` | Sortable table of listed stocks (price, week change, trades, your holdings, tickers), median price. |
 | `/stock?id=` | Profile header (avatar, ticker, price, week stats, pool depth, all-time high/low) with two tabs (`&tab=player` selects the second; `profileHref`). **Stock**: price chart, `TradePanel`, `ShortPanel`, `AlertPanel`, "Your stock" (`TickerEditor` + `PhotoEditor`, own only), holders, scoped feed. **Player** (`PlayerProfile`): stats, badges, net worth, best/worst calls, weekly results, recent trades, and `DiscordLink` on your own. |
 | `/portfolio` | Margin-call banner, cash/holdings/net worth/score, net-worth chart, per-holding avg cost + unrealised P/L, Margin (`#margin`: cover cost vs cash, deadline, "Raise £Y" with "Sell enough to cover" and per-holding sells), open shorts (live P/L), CEO-bonus summary, recent trades. |
@@ -449,7 +464,7 @@ Firestore live and writes only through callable functions.
 | `/reports` + `/report?id=` | Weekly report list + single report (rendered markdown). |
 | `/rules` | Editable `content/global.rules`, rendered with `SimpleMarkdown`. Reached from the account menu. |
 | `/changelog` + `/changelog?id=` | The Dev diary: list of `devlog` entries, and a single entry with older/newer links. Reached from the account menu. |
-| `/admin` | Approvals, Players (+rename), Weekly close (close-time picker + close now), Config editor, Content editor, Delist, Audit log, Reset (type-RESET gate). |
+| `/admin` | Global: Maintenance mode, **Servers** (create with name + first close time + an explicit "default settings"/"copy from <server>" choice, shows the generated code; rename; archive/unarchive; set Discord webhook, shown only as set/not set), Pending sign-ups (a **server dropdown** per row), **Add an existing user to a server**, Dev diary. Then a **server selector** that scopes everything below it: Players (+rename), Weekly close (close-time picker + close now), Discord, Config editor, Rules editor, Delist, Audit log (this server's entries), Reset (type-RESET gate), and View as player. |
 
 **Components:** `Feed`, `TradePanel` (live AMM preview using the shared quote
 functions), `ShortPanel`, `PostComposer`, `PhotoEditor` (client-side resize),
@@ -478,6 +493,8 @@ would. It's remembered in `sessionStorage` for the tab. Toggle it from the
 Admin page button or the account menu; a banner offers "Exit player view".
 **UI only:** the server still treats them as an admin. New admin-only UI must
 check `isAdmin`, never `isRealAdmin`, or it will leak into the preview.
+
+**URLs.** Every route takes `?s=<code>` (e.g. `/market/?s=482915`), like the existing `?id=`. Path-style URLs (`/<name>/market`) were rejected: the segment is chosen at runtime, so no page can be prerendered under a static export on GitHub Pages. Players with a single membership never see `?s=` (`serverHref` omits it, the server resolves silently from their only membership, and a stray `?s=` for a server they're not in is ignored). `?s=` is not a secret and not access control.
 
 **UI conventions.** No UI framework, no Tailwind, no animation library: all
 styling is plain CSS in `app/globals.css` using the `--bg/--panel/--accent/--up/--down`
@@ -512,22 +529,11 @@ respects `prefers-reduced-motion`.
 
 ## 7. Security & Firestore rules
 
-- `firestore.rules`: **all client writes denied** (`if false`). Reads are gated
-  by membership helpers — `signedIn`, `isAdmin` (an `admins/{uid}` doc exists),
-  `isPlayer` (a `players/{uid}` doc exists), `member` (player or admin). Members
-  read game collections; any signed-in user reads `config`/`content`; a player
-  reads their own `players` doc and `registrations`; `admins/{uid}` is readable
-  only by that uid; `auditLog` is admin-only; `alerts` and `notifications` are
-  readable only where `uid == auth.uid`; everything else (incl. `discordOutbox`,
-  `discordState`) is denied.
+- `firestore.rules`: **all client writes denied** (`if false`). Game data is under `servers/{serverId}/...` and gated by helpers that take the server id from the path: `memberOf(serverId)` = `exists(servers/$(serverId)/players/$(uid))` and `isAdmin()` (an `admins/{uid}` doc exists). Members read their own server's game collections, `config` and `content` (no longer readable by every signed-in user); admins read any server. `servers/{id}` itself is readable by its members and admins (so the name can show); `users/{uid}` only by its owner; `alerts` and `notifications` only where `uid == auth.uid`; `registrations` by their owner and admins; `auditLog` by admins; `devlog` and `system` by any signed-in user. `private/*`, `discordOutbox` and `discordState` match nothing and fall into the deny-all, as do the **legacy top-level game collections** (the migration's rollback copy). Rules never read `users/{uid}`. Each `exists()` is a billed read (cached within a request), so it's one extra read per query the client opens.
 - Password reset never reveals whether an email is registered (same message
   either way; `auth/user-not-found` is treated as success).
-- The Discord webhook URL is a Functions secret, validated to be a
-  `discord.com/api/webhooks/` URL (or localhost inside the emulator).
-- `firestore.indexes.json`: composite indexes for `trades(stockId+createdAt)`,
-  `trades(traderId+createdAt)`, `posts(taggedStockId+createdAt)`,
-  `registrations(status+createdAt)`, `shorts(ownerId+status)`,
-  `netWorthSeries(uid+week desc)` (the charts' "last 8 weeks" query).
+- Each server's Discord webhook URL is stored in the server-only document `servers/{id}/private/discord` (never a Functions secret, which don't scale to many servers), validated to be a `discord.com/api/webhooks/` URL (or localhost inside the emulator). Clients can never read it; the UI only learns `hasDiscordWebhook`. There is no fallback to another server's webhook.
+- `firestore.indexes.json`: composite indexes are defined per collection *id*, so the existing ones for `trades`, `posts`, `shorts`, `netWorthSeries`, `alerts` and `notifications` apply to those collections under every `servers/{id}` unchanged; `registrations(status+createdAt)` stays top-level. Added: `servers(status+closesAt)` (the scheduler), `auditLog(serverId+createdAt desc)` (the Admin page's per-server audit view), and a field override giving `players.marginCall.deadline` a **collection-group** index (the margin sweep across servers). New indexes take a few minutes to build after a deploy.
 - There are no public HTTPS endpoints: everything is a callable (auth checked)
   or a trigger/scheduled function (v2 scheduled functions are private Cloud
   Run services invoked only by Cloud Scheduler).
@@ -550,11 +556,11 @@ respects `prefers-reduced-motion`.
   - (The old `weekly-close.yml` GitHub cron is gone: it was best-effort and ran
     hours late. The close is now `closeScheduler` + `meta/state.closesAt`.)
 - **Root scripts:** `build`, `typecheck`, `test` / `test:unit`
-  (`vitest.unit.config.mts`) / `test:integration` (ensure-test-secret → build
+  (`vitest.unit.config.mts`: `shared/test/` and `web/test/`) / `test:integration` (build
   functions → `firebase emulators:exec --project demo-fsm`
   `vitest.integration.config.mts`), `dev:web`, `emulators`, `deploy:backend`.
 - **Tests**
-  - **Unit** (`shared/test/`): AMM maths vs the design doc, pool sizing/top-up,
+  - **Unit** (`shared/test/`, `web/test/`): server codes (format, generator, collision retry), `serverPaths`, `resolveServer`/`serverUiVisible`/`withServer`, the migration script's parity with `shared/`; **concealment** render tests (`web/test/concealment.test.tsx`: a single-membership player's pages contain no server name/switcher/picker/`?s=` and never say "server" or "group"; a multi-membership user sees them) and the **href scan** (`web/test/hrefs.test.ts`). Plus the original: AMM maths vs the design doc, pool sizing/top-up,
     starting cash, median listing, scoring, weekly growth, CEO bonus, idle rule,
     config validation, shorts, bankruptcy, positions, report markdown.
   - **Integration** (`functions/test/`): calls the real functions in the
@@ -564,9 +570,9 @@ respects `prefers-reduced-motion`.
     to the emulator's function route since the emulator has no Cloud
     Scheduler), net-worth series (trigger targeting, coalescing, no loop),
     margin (warn once, call lifecycle, forced and bankrupt liquidation,
-    report), password reset (imports the web app's `passwordReset.ts` and
+    report), maintenance mode, multi-server (`servers.test.ts`: createServer, isolation by rules and functions, the same user in two servers, per-server names/tickers, approval into a chosen server, `addPlayerToServer`, archive, the scheduler closing only the due server, the margin sweep across servers), Discord per-server webhooks (`discord.test.ts`), the legacy migration (`migration.test.ts`), password reset (imports the web app's `passwordReset.ts` and
     drives the Auth emulator's reset flow), admin ops, photos, reset. Always uses the `demo-fsm` project on
-    `127.0.0.1` and wipes the emulator before each test.
+    `127.0.0.1` and wipes the emulator before each test. `helpers.ts` makes `setupPlayers` create a server and approve into it; game paths passed to `getDoc`/`listDocs`/`patchDoc`/`clientRead` are scoped to that server automatically, and server-scoped callables get its `serverId`, unless a test passes one (isolation tests do; pass `null` to address the legacy top-level layout). Tests that move the close time use `setClosesAt` (it must update both `meta/state` and the server doc).
 
 Local dev needs **Node 22+** and **Java 21+** (for the Firestore emulator). See
 the README for the full setup, deploy steps and the list of required GitHub
@@ -596,8 +602,8 @@ full configurable-parameter set (§9).
 | **Margin calls + forced liquidation** | `shared/margin.ts`, `functions/margin.ts`, `MarginPrompt` (banner, "Raise £Y" prompt), Portfolio → Margin, account menu | Warn at `shortWarnPct` of cash (once), margin call above cash with a 7-day deadline (bell, Discord high, feed post, banner), resolved by selling/covering or by prices moving. After the deadline `closeScheduler` force-sells the minimum (largest holding first) and covers the shorts: FORCED SALE trades, feed post, notification, Discord, audit and a "Forced liquidations" report section. |
 | **Bankruptcy settlement** | `shared/bankruptcy.ts`, `functions/bankruptcy.ts` | Liquidate all holdings → pay creditors pro-rata → deactivate if short. Only the last resort of a forced liquidation, when selling everything can't cover the shorts (no longer reached from `closeShort`). Bankrupt players reactivate at the next close. |
 | **Stock photos / avatars** | `shared/photo.ts`, `functions/photo.ts`, `PhotoEditor` | 256px data-URL avatars with server-side magic-byte validation, stored in `photos/{uid}` so price ticks don't resend bytes. |
-| **Admin rename** | `functions/rename.ts` | Renames a player and rewrites denormalised names across all past trades/posts. |
-| **Full reset** | `functions/reset.ts` | Wipe-to-day-one preserving accounts/admins/config/audit; re-queues players as pending. |
+| **Admin rename** | `functions/rename.ts` | Renames a player (in one server) and rewrites denormalised names across that server's past trades/posts. |
+| **Full reset** | `functions/reset.ts` | Wipe ONE server to day one, preserving accounts/admins/the server/config/webhook/audit; re-queues players as pending (unless they are also in another server). |
 | **Net-worth history + charts** | `netWorthHistory/{uid}`, `netWorthSeries/{uid}_{week}`, `shared/netWorthSeries.ts`, `functions/netWorth.ts`, `lib/netWorth.ts`, `LineChart` | Weekly per-player samples (capped 104) plus a point per net-worth change (coalesced per `netWorthTickMinutes`, ≤500 per week doc). The client merges both (`mergeNetWorthPoints`) and the live value; only `/portfolio` and the Player tab subscribe, to the last 8 weeks. |
 | **Editable Rules** | `shared/content.ts`, `functions/content.ts`, `/rules` | Admin-editable `content/global`, rendered with `SimpleMarkdown`. |
 | **Dev diary** (was the change log) | `devlog/{id}`, `lib/devlog.ts`, `/changelog` (+ `?id=`), Admin → Dev diary | One entry per update (`DevlogEntry`: title, body, date). The page lists entries newest first (with a "New" badge for entries since your last visit, per device) and opens each on its own with older/newer links. Until any entry exists it shows the old `content.changelog` split by `# ` headings. |
@@ -610,7 +616,10 @@ full configurable-parameter set (§9).
 | **Preferences: theme + sound** | `lib/prefs.ts`, `lib/sound.ts`, `AccountMenu` | Light/dark/auto theme; optional UI sounds (off by default). |
 | **Mobile tab bar + installable PWA** | `Shell`, `app/manifest.ts`, `public/sw.js` | Bottom tabs on phones; Add to Home Screen. |
 | **Feed polish** | `Feed.tsx` | Trade cards show ticker and £ / % price delta with ▲/▼ (the per-trade sparkline was removed); forced trades get a solid-red FORCED SALE / FORCED COVER badge and card; names link to profiles; reactions bounce and their counts roll when they change live. |
-| **Discord webhook** | `shared/discord.ts`, `functions/discord.ts`, `marketEvents.ts`, `DiscordLink`, Admin → Discord | Outbox + Firestore trigger, hourly rate limit + digest, @mentions for linked players. Webhook URL only in the `DISCORD_WEBHOOK_URL` secret. Slash commands are a possible next step (HTTP interactions endpoint). |
+| **Discord webhook** | `shared/discord.ts`, `functions/discord.ts`, `marketEvents.ts`, `DiscordLink`, Admin → Servers / Discord | Per-server outbox + Firestore trigger, hourly rate limit + digest, @mentions for linked players (the link is per server). One webhook per server in the server-only doc `servers/{id}/private/discord`, set with `setDiscordWebhook`; the old `DISCORD_WEBHOOK_URL` secret is retired. No webhook = items are `skipped`; never any fallback to another server. Slash commands are a possible next step (HTTP interactions endpoint). |
+| **Multiple servers** | `shared/servers.ts`, `functions/servers.ts` + every function, `ServerProvider`/`GameRoot`/`ServerLink`/`ServerPicker`, `firestore.rules`, Admin → Servers | Independent games for separate friend groups on one site (§11). Admin-created, code-addressed (`?s=`), per-server players/stocks/state/config/Discord; one login across servers; invisible to single-server players. |
+| **Maintenance mode** | `functions/common.ts` (`gameCall`), `setMaintenance`, Admin, `Shell` banner | Global kill switch (§11.4) used to run the migration with nothing writing. |
+| **Legacy migration scripts** | `scripts/migrate-to-servers.mjs`, `scripts/delete-legacy.mjs` | Copy-never-move migration of the original single-game data into the first server, with backup, verification and a rollback copy (§11.5). |
 | **Weekly awards + badges** | `shared/awards.ts`, `weeklyClose.ts` | Stored on `report.highlights.awards`; shown in the report, results screen, close post and as profile badges. |
 | **Recap** | `functions/recap.ts`, `RecapCard` | "While you were away" after `recapAfterHours`. |
 | **Moments** | `Moments`, `ResultsModal`, `lib/confetti.ts` | Results screen once per close; confetti + banner for winning the week or taking #1. |
@@ -632,6 +641,7 @@ full configurable-parameter set (§9).
 
 ## 10. Guidance for future changes
 
+- **Everything game-related is per server.** New collections go under `servers/{id}` (add them to `serverPaths`, `SERVER_COLLECTIONS`, the rules, and the migration's `COPIED` list if legacy data exists). New callables take `serverId` through `gameCtx` and use `refs(serverId)`; never reach `db.collection("…")` for game data. Player-visible text must not say "server" or "group". New links go through `ServerLink`.
 - **Never let the client write game state.** New mutations must be Cloud
   Functions; keep `firestore.rules` write rules at `if false`.
 - **Put maths in `shared/`.** If the client needs a preview (it almost always
@@ -645,5 +655,31 @@ full configurable-parameter set (§9).
   test in `functions/test/` for any new function; CI blocks deploys on failure.
 - **Denormalised names** (`traderName`, `stockName`, `authorName`,
   `taggedName`) must be kept in sync — see `rename.ts` for the pattern.
+- Rule `exists()` lookups count as reads (cached within a request): keep rules to a membership check per server.
 - Keep the friend-group scale in mind: `readWorld` loads every player/stock/
   holding, which is fine for tens of documents but is not built for thousands.
+
+---
+
+## 11. Servers (multiple independent games)
+
+### 11.1 Model
+- A **server** is one friend group's game. `servers/{code}`; the code is 6 random digits, first non-zero, generated by `createServer` with a create-only write and retried on collision. It is immutable; only the display `name` can change. Nothing crosses between servers: no shared cash, stocks, prices, trades, posts, leaderboards or reports.
+- **Only the admin creates servers** and the single global `admins/{uid}` list administers all of them (there are no per-server admins). Archiving makes a server read-only; there is no delete.
+- **One login per person.** Registration (`registrations/{uid}`) is global and unchanged. Approval chooses the server; `addPlayerToServer` adds an existing user to another. A user has a separate player/cash/stock/ticker/display name in each server. Membership = the existence of `servers/{id}/players/{uid}`; `users/{uid}.serverIds` is a cache for the client.
+- **Names and tickers** are unique only within a server.
+
+### 11.2 Concealment
+Players must never learn multiple servers exist. Only users with two or more memberships (and the admin, in Admin) see anything server-related: the server name in the top bar, the account-menu switcher, the picker, and `?s=` in URLs. For everyone else `serverParam` is null, the server resolves silently from their only membership, a stray `?s=` for a server they aren't in is ignored, and no error, notification, feed post, Discord message, report or page says "server" or "group". Enforced by `web/test/concealment.test.tsx`, the href scan, and integration tests asserting error wording.
+
+### 11.3 Routing
+`resolveServer({requested, lastUsed, memberships, isAdmin})`: a valid `?s=` for one of your servers (any server, for an admin) wins; else your only membership; else the last-used server on this device (localStorage, per uid); else the picker (2+), or the registration/pending screen (none). The admin with no server yet gets the Admin page. All hrefs go through `ServerLink`/`serverHref`.
+
+### 11.4 Maintenance mode
+`system/maintenance {enabled}` is a global kill switch. While on: `gameCall` rejects every signed-in call (`unavailable`, "The game is being upgraded, back shortly."), and `closeScheduler`, `discordDigest`, `checkPriceAlerts`, `onStockTraded` and `discordDeliver` skip their work (one extra read each). Only `setMaintenance` stays available. The Shell shows a banner. A due weekly close simply waits until it is switched off. (The prompt also allowed a per-server flag; `ServerDoc.maintenance` is honoured by `requireServer` but nothing sets it yet.)
+
+### 11.5 Migration (`scripts/migrate-to-servers.mjs`)
+A local Node script (Admin SDK; not a deployed function): `--project`, `--name`, `--backup-dir`, `--execute`. Without `--execute` it is a dry run that reads and prints but writes nothing (no Firestore, no files) and prints the server code it would use (the code is derived deterministically from project + name, with the same format and collision check as `createServer`, so the real run uses the same one). In order: check prerequisites (maintenance on, next `closesAt` more than 2 hours away; the real run refuses otherwise) → back up every top-level collection (recursively) to JSON with per-collection counts, aborting on any read failure → plan → **copy** the 17 collections (`COPIED`) to `servers/{code}/…` with ids and fields unchanged, plus `users/{uid}.serverIds` for every player → verify per-collection counts, **every document**, and checksum totals (Σ cash, Σ poolCash/poolShares/price, prize pool, week) and print PASS/FAIL (non-zero exit on FAIL). Idempotent and resumable: it only `create()`s documents that don't exist, leaves matching ones alone, and treats a *differing* existing document as a conflict that stops the run rather than overwriting newer data; a re-run finds its earlier server via `migration.source == "legacy"`. The legacy top-level collections are never modified or read by the new code (rules deny them); `scripts/delete-legacy.mjs` removes them later behind a typed confirmation phrase, only if the migration is marked complete and the new copy is at least as large. Deviation from the brief: the prerequisite checks run *before* the backup (reads only), so a refused run leaves no backup folder behind. The cutover checklist and rollback are in the README.
+
+### 11.6 Costs
+Still two Cloud Scheduler jobs. The per-minute tick is one `servers` query plus one collection-group query regardless of how many servers exist; clients listen to one server only, so reads scale with the active server's size. Rule `exists()` lookups count as reads (cached within a request).

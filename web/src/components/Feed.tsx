@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import { REACTION_EMOJI, REACTION_TYPES, type Post, type ReactionType, type Trade } from "@fsm/shared";
@@ -11,7 +11,7 @@ import { ago, changeClass, gbp, pct, profileHref, shares, signedGbp, stockHref }
 import { playSound } from "@/lib/sound";
 import { feedCutoff } from "@/lib/pagination";
 import { Avatar } from "./Avatar";
-import { useGame } from "./GameProvider";
+import { useGame, usePaths } from "./GameProvider";
 import { PostComposer } from "./PostComposer";
 import { SlidePagination } from "./SlidePagination";
 
@@ -31,6 +31,7 @@ export function Feed({ stockId, pageSize = 15 }: { stockId?: string; pageSize?: 
  */
 function PagedFeed({ stockId, pageSize }: { stockId?: string; pageSize: number }) {
   const db = fb().db;
+  const paths = usePaths();
   const [page, setPage] = useState(1);
   const want = (page + 1) * pageSize;
   const [tradeLimit, setTradeLimit] = useState(want);
@@ -42,14 +43,14 @@ function PagedFeed({ stockId, pageSize }: { stockId?: string; pageSize: number }
 
   const tradesQ = useQuery<Trade>(
     stockId
-      ? query(collection(db, "trades"), where("stockId", "==", stockId), orderBy("createdAt", "desc"), limit(tradeLimit))
-      : query(collection(db, "trades"), orderBy("createdAt", "desc"), limit(tradeLimit)),
+      ? query(collection(db, paths.trades), where("stockId", "==", stockId), orderBy("createdAt", "desc"), limit(tradeLimit))
+      : query(collection(db, paths.trades), orderBy("createdAt", "desc"), limit(tradeLimit)),
     [stockId, tradeLimit],
   );
   const postsQ = useQuery<Post>(
     stockId
-      ? query(collection(db, "posts"), where("taggedStockId", "==", stockId), orderBy("createdAt", "desc"), limit(postLimit))
-      : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(postLimit)),
+      ? query(collection(db, paths.posts), where("taggedStockId", "==", stockId), orderBy("createdAt", "desc"), limit(postLimit))
+      : query(collection(db, paths.posts), orderBy("createdAt", "desc"), limit(postLimit)),
     [stockId, postLimit],
   );
 

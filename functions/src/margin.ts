@@ -28,7 +28,7 @@ import {
   type Trade,
 } from "@fsm/shared";
 import { applyBankruptcySettlement } from "./bankruptcy";
-import { auditEntry, auditRef, db, readConfig, readState, refs } from "./common";
+import { auditEntry, auditRef, db, globalRefs, readConfig, readState, refs, type Refs } from "./common";
 import { enqueueDiscord } from "./discord";
 import { withHoldingStats } from "./marketEvents";
 
@@ -50,8 +50,8 @@ export function marginPatch(flags: MarginFlags): Record<string, unknown> {
   };
 }
 
-function systemPost(tx: Transaction, text: string, week: number, now: number, taggedStock: Pick<Stock, "id" | "displayName"> | null = null): void {
-  const ref = db.collection("posts").doc();
+function systemPost(tx: Transaction, R: Refs, text: string, week: number, now: number, taggedStock: Pick<Stock, "id" | "displayName"> | null = null): void {
+  const ref = R.col("posts").doc();
   const post: Post = {
     id: ref.id,
     authorId: "system",
@@ -70,26 +70,26 @@ function systemPost(tx: Transaction, text: string, week: number, now: number, ta
   tx.set(ref, post);
 }
 
-function notify(tx: Transaction, uid: string, title: string, body: string, now: number): void {
-  const ref = db.collection("notifications").doc();
+function notify(tx: Transaction, R: Refs, uid: string, title: string, body: string, now: number): void {
+  const ref = R.col("notifications").doc();
   const note: AppNotification = { id: ref.id, uid, kind: "margin", title, body, stockId: null, link: "/portfolio/#margin", createdAt: now, read: false };
   tx.set(ref, note);
 }
 
 /** Tell the player (and, for calls and clears, the market) about a margin transition. */
-export function announceMargin(tx: Transaction, player: Pick<Player, "uid" | "displayName">, event: MarginEvent, flags: MarginFlags, status: MarginStatus, week: number, now: number): void {
+export function announceMargin(tx: Transaction, R: Refs, player: Pick<Player, "uid" | "displayName">, event: MarginEvent, flags: MarginFlags, status: MarginStatus, week: number, now: number): void {
   if (event === "warned") {
-    notify(tx, player.uid, "⚠️ Margin warning", `Covering your shorts would cost ${gbp(status.coverCost)}, ${Math.round((status.coverCost / Math.max(status.cash, 0.01)) * 100)}% of your ${gbp(status.cash)} cash. Above 100% you'll be margin called.`, now);
-    enqueueDiscord(tx, "normal", "marginWarn", marginWarnMessage(player.uid, status.coverCost, status.cash), now);
+    notify(tx, R, player.uid, "⚠️ Margin warning", `Covering your shorts would cost ${gbp(status.coverCost)}, ${Math.round((status.coverCost / Math.max(status.cash, 0.01)) * 100)}% of your ${gbp(status.cash)} cash. Above 100% you'll be margin called.`, now);
+    enqueueDiscord(tx, R, "normal", "marginWarn", marginWarnMessage(player.uid, status.coverCost, status.cash), now);
   } else if (event === "called" && flags.marginCall) {
     const when = formatCloseTime(flags.marginCall.deadline);
-    notify(tx, player.uid, "🚨 Margin call", `Your shorts cost more to cover than your cash. Raise ${gbp(flags.marginCall.shortfall)} by ${when} (UK time) by selling holdings or covering, or holdings will be force-sold.`, now);
-    systemPost(tx, `${player.displayName} has been margin called: they must raise ${gbp(flags.marginCall.shortfall)} by ${when} (UK time).`, week, now);
-    enqueueDiscord(tx, "high", "marginCall", marginCallMessage(player.uid, player.displayName, flags.marginCall.shortfall, when), now);
+    notify(tx, R, player.uid, "🚨 Margin call", `Your shorts cost more to cover than your cash. Raise ${gbp(flags.marginCall.shortfall)} by ${when} (UK time) by selling holdings or covering, or holdings will be force-sold.`, now);
+    systemPost(tx, R, `${player.displayName} has been margin called: they must raise ${gbp(flags.marginCall.shortfall)} by ${when} (UK time).`, week, now);
+    enqueueDiscord(tx, R, "high", "marginCall", marginCallMessage(player.uid, player.displayName, flags.marginCall.shortfall, when), now);
   } else if (event === "cleared") {
-    notify(tx, player.uid, "✅ Margin call cleared", "You can cover your shorts again. Nothing will be force-sold.", now);
-    systemPost(tx, `${player.displayName} cleared their margin call.`, week, now);
-    enqueueDiscord(tx, "normal", "marginCleared", marginClearedMessage(player.uid, player.displayName), now);
+    notify(tx, R, player.uid, "✅ Margin call cleared", "You can cover your shorts again. Nothing will be force-sold.", now);
+    systemPost(tx, R, `${player.displayName} cleared their margin call.`, week, now);
+    enqueueDiscord(tx, R, "normal", "marginCleared", marginClearedMessage(player.uid, player.displayName), now);
   }
 }
 
@@ -98,9 +98,9 @@ export function announceMargin(tx: Transaction, player: Pick<Player, "uid" | "di
  * transaction (fresh cash and flags; 1 read, ≤1 player write). Shorts and
  * pools come from the caller's snapshot.
  */
-export async function reevaluateMargin(uid: string, openShorts: Short[], stockOf: Map<string, Stock>, cfg: GameConfig, week: number): Promise<MarginEvent> {
+export async function reevaluateMargin(R: Refs, uid: string, openShorts: Short[], stockOf: Map<string, Stock>, cfg: GameConfig, week: number): Promise<MarginEvent> {
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(refs.player(uid));
+    const snap = await tx.get(R.player(uid));
     const p = snap.data();
     if (!p) return null;
     const mine = openShorts.filter((s) => s.ownerId === uid && s.status === "open");
@@ -109,8 +109,8 @@ export async function reevaluateMargin(uid: string, openShorts: Short[], stockOf
     const status = marginStatus(p.cash, mine, poolFrom(stockOf), cfg);
     const next = nextMarginFlags(p, status, now);
     if (!next.changed) return null;
-    tx.update(refs.player(uid), marginPatch(next.flags));
-    announceMargin(tx, p, next.event, next.flags, status, week, now);
+    tx.update(R.player(uid), marginPatch(next.flags));
+    announceMargin(tx, R, p, next.event, next.flags, status, week, now);
     return next.event;
   });
 }
@@ -144,13 +144,13 @@ export class PoolLedger {
   }
 
   /** Write every touched stock once. Forced trades keep records honest but don't announce them. */
-  flush(tx: Transaction, original: Map<string, Stock>, mark: StockTradeMark): void {
+  flush(tx: Transaction, R: Refs, original: Map<string, Stock>, mark: StockTradeMark): void {
     for (const [id, t] of this.touched) {
       const before = original.get(id)!;
       const s = this.stockOf.get(id)!;
       const hi = Math.max(...t.prices);
       const lo = Math.min(...t.prices);
-      tx.update(refs.stock(id), {
+      tx.update(R.stock(id), {
         poolCash: s.poolCash,
         poolShares: s.poolShares,
         k: s.k,
@@ -170,8 +170,8 @@ export type LiquidationResult =
   | { liquidated: true; uid: string; bankrupt: boolean; sold: { stockName: string; shares: number; cash: number }[]; raised: number; covered: string[] }
   | { liquidated: false; uid: string; reason: string };
 
-function tradeDoc(a: Omit<Trade, "id" | "linkedPostId">): Trade {
-  const ref = db.collection("trades").doc();
+function tradeDoc(R: Refs, a: Omit<Trade, "id" | "linkedPostId">): Trade {
+  const ref = R.col("trades").doc();
   return { id: ref.id, linkedPostId: null, ...a };
 }
 
@@ -186,14 +186,14 @@ function tradeDoc(a: Omit<Trade, "id" | "linkedPostId">): Trade {
  * a notification, a high-priority Discord post, an audit entry and a section
  * in the weekly report.
  */
-export async function forceLiquidate(uid: string, now: number): Promise<LiquidationResult> {
+export async function forceLiquidate(R: Refs, uid: string, now: number): Promise<LiquidationResult> {
   return db.runTransaction(async (tx): Promise<LiquidationResult> => {
-    const cfg = await readConfig(tx);
-    const { state, exists: stateExists } = await readState(tx, now);
+    const cfg = await readConfig(tx, R);
+    const { state, exists: stateExists } = await readState(tx, R, now);
     const [playerSnap, shortsSnap, holdingsSnap] = await Promise.all([
-      tx.get(refs.player(uid)),
-      tx.get(db.collection("shorts").where("ownerId", "==", uid).where("status", "==", "open")),
-      tx.get(db.collection("holdings").where("uid", "==", uid)),
+      tx.get(R.player(uid)),
+      tx.get(R.col("shorts").where("ownerId", "==", uid).where("status", "==", "open")),
+      tx.get(R.col("holdings").where("uid", "==", uid)),
     ]);
     const player = playerSnap.data();
     if (!player) return { liquidated: false, uid, reason: "No such player." };
@@ -201,18 +201,18 @@ export async function forceLiquidate(uid: string, now: number): Promise<Liquidat
     const shorts = shortsSnap.docs.map((d) => d.data() as Short);
     const rawHoldings = holdingsSnap.docs.map((d) => d.data() as Holding);
     const ids = [...new Set([...shorts.map((s) => s.stockId), ...rawHoldings.map((h) => h.stockId)])];
-    const stockSnaps = await Promise.all(ids.map((id) => tx.get(refs.stock(id))));
+    const stockSnaps = await Promise.all(ids.map((id) => tx.get(R.stock(id))));
     const original = new Map(stockSnaps.filter((s) => s.exists).map((s) => [s.id, s.data() as Stock]));
     // Legacy holdings get their cost basis rebuilt (reads) before any writes.
-    const holdings = (await Promise.all(rawHoldings.map((h) => withHoldingStats(tx, h)))) as Holding[];
+    const holdings = (await Promise.all(rawHoldings.map((h) => withHoldingStats(tx, R, h)))) as Holding[];
     const week = state.currentWeek;
 
     const status = marginStatus(player.cash, shorts, poolFrom(original), cfg);
     if (status.level !== "call") {
       // Resolved at the last moment (e.g. a price move the trigger hadn't processed yet).
       const next = nextMarginFlags(player, status, now);
-      tx.update(refs.player(uid), marginPatch(next.flags));
-      announceMargin(tx, player, next.event, next.flags, status, week, now);
+      tx.update(R.player(uid), marginPatch(next.flags));
+      announceMargin(tx, R, player, next.event, next.flags, status, week, now);
       return { liquidated: false, uid, reason: "The margin call was already covered." };
     }
 
@@ -249,7 +249,7 @@ export async function forceLiquidate(uid: string, now: number): Promise<Liquidat
         }
         total += cost;
         const priceAfter = q?.priceAfter ?? priceBefore;
-        tx.update(refs.short(s.id), {
+        tx.update(R.short(s.id), {
           status: "closed",
           closePrice: priceAfter,
           closeCost: cost,
@@ -257,7 +257,7 @@ export async function forceLiquidate(uid: string, now: number): Promise<Liquidat
           closedAt: now,
           closeWeek: week,
         });
-        trades.push(tradeDoc({ ...base, stockId: s.stockId, stockName: s.stockName, side: "buy", kind: "closeShort", forced: true, cashAmount: cost, netCash: -cost, shares: s.shares, fee: q?.fee ?? cost - cost / (1 + fee), priceBefore, priceAfter }));
+        trades.push(tradeDoc(R, { ...base, stockId: s.stockId, stockName: s.stockName, side: "buy", kind: "closeShort", forced: true, cashAmount: cost, netCash: -cost, shares: s.shares, fee: q?.fee ?? cost - cost / (1 + fee), priceBefore, priceAfter }));
       }
       return total;
     };
@@ -269,61 +269,70 @@ export async function forceLiquidate(uid: string, now: number): Promise<Liquidat
       for (const sale of plan.sales) {
         const h = holdings.find((x) => x.stockId === sale.stockId)!;
         ledger.apply(sale.stockId, sale.newPoolCash, sale.newPoolShares, sale.priceAfter);
-        if (sale.all) tx.delete(refs.holding(uid, sale.stockId));
-        else tx.set(refs.holding(uid, sale.stockId), { uid, stockId: sale.stockId, ...holdingAfterSell(h, sale.shares, now), updatedAt: now });
+        if (sale.all) tx.delete(R.holding(uid, sale.stockId));
+        else tx.set(R.holding(uid, sale.stockId), { uid, stockId: sale.stockId, ...holdingAfterSell(h, sale.shares, now), updatedAt: now });
         fees += sale.fee;
         cash += sale.netCash;
         raised += sale.netCash;
         sold.push({ stockName: nameOf(sale.stockId), shares: sale.shares, cash: sale.netCash });
-        trades.push(tradeDoc({ ...base, stockId: sale.stockId, stockName: nameOf(sale.stockId), side: "sell", kind: "liquidation", cashAmount: sale.grossCash, netCash: sale.netCash, shares: sale.shares, fee: sale.fee, priceBefore: sale.priceBefore, priceAfter: sale.priceAfter }));
+        trades.push(tradeDoc(R, { ...base, stockId: sale.stockId, stockName: nameOf(sale.stockId), side: "sell", kind: "liquidation", cashAmount: sale.grossCash, netCash: sale.netCash, shares: sale.shares, fee: sale.fee, priceBefore: sale.priceBefore, priceAfter: sale.priceAfter }));
       }
       cash -= coverAll();
-      tx.update(refs.player(uid), { cash: Math.max(0, cash), ...marginPatch({}) });
+      tx.update(R.player(uid), { cash: Math.max(0, cash), ...marginPatch({}) });
     } else {
       // Even selling everything can't cover it: buy the shorts back, then settle the debt (bankruptcy rule).
       const debt = coverAll();
-      const result = applyBankruptcySettlement(tx, player, holdings, ledger, debt, [], fee, now, week, marginPatch({}));
+      const result = applyBankruptcySettlement(tx, R, player, holdings, ledger, debt, [], fee, now, week, marginPatch({}));
       bankrupt = result.bankrupt;
       for (const sale of result.sales) {
         fees += sale.fee;
         raised += sale.cash;
         sold.push({ stockName: nameOf(sale.stockId), shares: sale.shares, cash: sale.cash });
-        trades.push(tradeDoc({ ...base, stockId: sale.stockId, stockName: nameOf(sale.stockId), side: "sell", kind: "liquidation", cashAmount: sale.grossCash, netCash: sale.cash, shares: sale.shares, fee: sale.fee, priceBefore: sale.priceBefore, priceAfter: sale.priceAfter }));
+        trades.push(tradeDoc(R, { ...base, stockId: sale.stockId, stockName: nameOf(sale.stockId), side: "sell", kind: "liquidation", cashAmount: sale.grossCash, netCash: sale.cash, shares: sale.shares, fee: sale.fee, priceBefore: sale.priceBefore, priceAfter: sale.priceAfter }));
       }
     }
 
-    ledger.flush(tx, original, mark);
-    for (const t of trades) tx.set(db.collection("trades").doc(t.id), t);
+    ledger.flush(tx, R, original, mark);
+    for (const t of trades) tx.set(R.col("trades").doc(t.id), t);
     const nextState = { prizePool: state.prizePool + fees, weekFees: state.weekFees + fees };
-    if (stateExists) tx.update(refs.state(), nextState);
-    else tx.set(refs.state(), { ...state, ...nextState });
+    if (stateExists) tx.update(R.state(), nextState);
+    else tx.set(R.state(), { ...state, ...nextState });
 
     const covered = [...new Set(shorts.map((s) => s.stockName))];
     const soldText = liquidationSoldText(sold);
     const coveredText = covered.length === 1 ? `a short on ${covered[0]}` : `shorts on ${covered.join(", ")}`;
     const tail = bankrupt ? " It wasn't enough: they're bankrupt until the next weekly close." : "";
-    systemPost(tx, `${player.displayName} was force-liquidated to cover ${coveredText}: sold ${soldText} for ${gbp(raised)}.${tail}`, week, now);
-    notify(tx, uid, "💥 Forced sale", `Your margin call deadline passed. To cover ${coveredText} the market sold ${soldText} for ${gbp(raised)}.${bankrupt ? " It wasn't enough, so you're bankrupt until the next weekly close." : " The rest of your portfolio is untouched."}`, now);
-    enqueueDiscord(tx, "high", "liquidation", liquidationMessage(uid, player.displayName, covered, soldText, raised, bankrupt), now);
-    tx.set(auditRef(), auditEntry("system", "forcedLiquidation", uid, { marginCall: player.marginCall, coverCost: status.coverCost, cash: player.cash, sold, raised, covered, bankrupt }, now));
+    systemPost(tx, R, `${player.displayName} was force-liquidated to cover ${coveredText}: sold ${soldText} for ${gbp(raised)}.${tail}`, week, now);
+    notify(tx, R, uid, "💥 Forced sale", `Your margin call deadline passed. To cover ${coveredText} the market sold ${soldText} for ${gbp(raised)}.${bankrupt ? " It wasn't enough, so you're bankrupt until the next weekly close." : " The rest of your portfolio is untouched."}`, now);
+    enqueueDiscord(tx, R, "high", "liquidation", liquidationMessage(uid, player.displayName, covered, soldText, raised, bankrupt), now);
+    tx.set(auditRef(), auditEntry("system", "forcedLiquidation", uid, { marginCall: player.marginCall, coverCost: status.coverCost, cash: player.cash, sold, raised, covered, bankrupt }, now, R.serverId));
     return { liquidated: true, uid, bankrupt, sold, raised, covered };
   });
 }
 
 /**
- * Players whose margin call deadline has passed (one cheap query: a single
- * read when there are none), liquidated one transaction each.
+ * Players whose margin call deadline has passed, across ALL servers: one
+ * collection-group query on `players` (a single read when there are none),
+ * liquidated one transaction each, each in its own server. Archived servers
+ * (and the legacy top-level `players` collection, which has no server parent)
+ * are skipped.
  */
 export async function liquidateDueMarginCalls(now: number): Promise<LiquidationResult[]> {
-  const due = await db.collection("players").where("marginCall.deadline", "<=", now).get();
+  const due = await db.collectionGroup("players").where("marginCall.deadline", "<=", now).get();
   const out: LiquidationResult[] = [];
+  const active = new Map<string, boolean>();
   for (const d of due.docs) {
+    const serverId = d.ref.parent.parent?.id;
+    const inServers = d.ref.parent.parent?.parent.id === "servers";
+    if (!serverId || !inServers) continue;
+    if (!active.has(serverId)) active.set(serverId, (await globalRefs.server(serverId).get()).data()?.status === "active");
+    if (!active.get(serverId)) continue;
     try {
-      const res = await forceLiquidate(d.id, now);
-      logger.info("Forced liquidation", res);
+      const res = await forceLiquidate(refs(serverId), d.id, now);
+      logger.info("Forced liquidation", { serverId, ...res });
       out.push(res);
     } catch (err) {
-      logger.error("Forced liquidation failed", { uid: d.id, err });
+      logger.error("Forced liquidation failed", { serverId, uid: d.id, err });
     }
   }
   return out;

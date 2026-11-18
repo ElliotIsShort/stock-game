@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useMemo } from "react";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import {
@@ -19,7 +19,7 @@ import { ago, changeClass, gbp, pct, shares, signedGbp, stockHref } from "@/lib/
 import { useNetWorthPoints } from "@/lib/netWorth";
 import { liveGrowth } from "@/lib/standings";
 import { DiscordLink } from "./DiscordLink";
-import { useGame } from "./GameProvider";
+import { useGame, usePaths } from "./GameProvider";
 import { LineChart } from "./LineChart";
 import { StatCard } from "./StatCard";
 
@@ -35,14 +35,15 @@ interface Call {
 export function PlayerProfile({ uid }: { uid: string }) {
   const { playerById, stockById, me, players, tickerOf } = useGame();
   const db = fb().db;
+  const paths = usePaths();
   const player = playerById.get(uid);
   const isMe = me?.uid === uid;
 
   // Weekly close history + the per-change series of recent weeks + the live value.
   const nwPoints = useNetWorthPoints(uid, player?.netWorth);
-  const reports = useQuery<WeeklyReport>(query(collection(db, "weeklyReports"), orderBy("week", "desc")), []);
-  const trades = useQuery<Trade>(query(collection(db, "trades"), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)), [uid]);
-  const closedShorts = useQuery<Short>(query(collection(db, "shorts"), where("ownerId", "==", uid), where("status", "==", "closed")), [uid]);
+  const reports = useQuery<WeeklyReport>(query(collection(db, paths.weeklyReports), orderBy("week", "desc")), []);
+  const trades = useQuery<Trade>(query(collection(db, paths.trades), where("traderId", "==", uid), orderBy("createdAt", "desc"), limit(500)), [uid]);
+  const closedShorts = useQuery<Short>(query(collection(db, paths.shorts), where("ownerId", "==", uid), where("status", "==", "closed")), [uid]);
 
   const badges = useMemo(
     () => badgesFor(uid, reports.data.map((r) => ({ week: r.week, winners: reportWinners(r), awards: r.highlights.awards })), player?.joinWeek ?? 0),

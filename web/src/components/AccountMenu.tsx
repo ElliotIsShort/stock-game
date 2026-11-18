@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import Link from "@/components/ServerLink";
+import { usePathname } from "next/navigation";
+import { useServerRouter } from "./ServerLink";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { formatCloseTime } from "@fsm/shared";
 import { gbp, profileHref, stockHref } from "@/lib/format";
@@ -9,6 +10,7 @@ import { setPrefs, usePrefs, type ThemePref } from "@/lib/prefs";
 import { devlogSeenAt, isNewSince, useDevlog } from "@/lib/devlog";
 import { playSound } from "@/lib/sound";
 import { sendPasswordReset } from "@/lib/passwordReset";
+import { useServerDocs } from "@/lib/serverNames";
 import { Avatar } from "./Avatar";
 import { useGame } from "./GameProvider";
 
@@ -30,7 +32,7 @@ const THEMES: { value: ThemePref; label: string; icon: string }[] = [
 export function AccountMenu() {
   const g = useGame();
   const path = usePathname();
-  const router = useRouter();
+  const router = useServerRouter();
   const menuId = useId();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,8 @@ export function AccountMenu() {
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
   const name = me?.displayName ?? g.user?.displayName ?? g.user?.email ?? "Account";
   const uid = me?.uid ?? g.user?.uid ?? "";
+  // Only people in two or more servers can see (or need) any of this.
+  const serverDocs = useServerDocs(g.showServerUi ? g.memberships : []);
 
   // Close on navigation.
   useEffect(() => setOpen(false), [path]);
@@ -180,6 +184,29 @@ export function AccountMenu() {
               </>
             )}
           </dl>
+        )}
+
+        {g.showServerUi && (
+          <>
+            <div className="account-sep" role="separator" />
+            <div className="account-label muted small" role="presentation">Switch server</div>
+            {g.memberships.map((id) => (
+              <button
+                key={id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={id === g.serverId}
+                className="account-item"
+                onClick={() => {
+                  setOpen(false);
+                  if (id !== g.serverId) g.switchServer(id);
+                }}
+              >
+                <span>{serverDocs.docs.get(id)?.name ?? id}</span>
+                {id === g.serverId && <span className="muted small">Current</span>}
+              </button>
+            ))}
+          </>
         )}
 
         <div className="account-sep" role="separator" />

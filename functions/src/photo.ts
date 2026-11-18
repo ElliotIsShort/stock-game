@@ -1,6 +1,6 @@
 import { HttpsError } from "firebase-functions/v2/https";
 import { parsePhotoDataUrl, type Player, type StockPhoto } from "@fsm/shared";
-import { gameCall, asObject, auditEntry, auditRef, db, isAdmin, optString, refs, requireAuth } from "./common";
+import { gameCall, gameCtx, auditEntry, auditRef, db, optString } from "./common";
 
 /**
  * Set or remove your own stock's photo. Pass `photo: null` to remove.
@@ -8,15 +8,14 @@ import { gameCall, asObject, auditEntry, auditRef, db, isAdmin, optString, refs,
  * safety valve; that is audit-logged.
  */
 export const setStockPhoto = gameCall(async (req) => {
-  const uid = requireAuth(req);
-  const data = asObject(req.data);
+  const { uid, serverId, R, admin, data } = await gameCtx(req, { allowAdmin: true });
   const target = optString(data, "uid", 128) ?? uid;
   const photo = data.photo ?? null;
   const now = Date.now();
 
   const forSomeoneElse = target !== uid;
   if (forSomeoneElse) {
-    if (!(await isAdmin(uid))) throw new HttpsError("permission-denied", "You can only change your own photo.");
+    if (!admin) throw new HttpsError("permission-denied", "You can only change your own photo.");
     if (photo !== null) throw new HttpsError("invalid-argument", "Admins can only remove other players' photos.");
   }
   let dataUrl: string | null = null;
@@ -27,18 +26,18 @@ export const setStockPhoto = gameCall(async (req) => {
   }
 
   await db.runTransaction(async (tx) => {
-    const playerSnap = await tx.get(refs.player(target));
+    const playerSnap = await tx.get(R.player(target));
     if (!playerSnap.exists) throw new HttpsError("not-found", forSomeoneElse ? "Player not found." : "You're not an approved player.");
     if (!forSomeoneElse && !(playerSnap.data() as Player).isActive) {
       throw new HttpsError("permission-denied", "Your account is delisted.");
     }
     if (dataUrl) {
       const doc: StockPhoto = { uid: target, dataUrl, updatedAt: now };
-      tx.set(refs.photo(target), doc);
+      tx.set(R.photo(target), doc);
     } else {
-      tx.delete(refs.photo(target));
+      tx.delete(R.photo(target));
     }
-    if (forSomeoneElse) tx.set(auditRef(), auditEntry(uid, "removePhoto", target, {}, now));
+    if (forSomeoneElse) tx.set(auditRef(), auditEntry(uid, "removePhoto", target, {}, now, serverId));
   });
   return { ok: true, hasPhoto: dataUrl !== null };
 });

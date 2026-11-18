@@ -1,24 +1,24 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { mergeConfig, validateConfigPatch, type Holding, type Player, type Post, type Stock } from "@fsm/shared";
-import { gameCall, asObject, auditEntry, auditRef, db, readState, refs, reqNumber, reqString, requireAdmin } from "./common";
+import { gameCall, gameCtx, asObject, auditEntry, auditRef, db, readState, reqNumber, reqString, requireAdmin } from "./common";
 import { closeWeek } from "./weeklyClose";
 
 /** Admin: edit config/global. Unknown keys and out-of-range values are rejected. */
 export const updateConfig = gameCall(async (req) => {
-  const adminId = await requireAdmin(req);
-  const patch = asObject(asObject(req.data).patch);
+  const { uid: adminId, serverId, R, data } = await gameCtx(req, { admin: true });
+  const patch = asObject(data.patch);
   const errors = validateConfigPatch(patch);
   if (errors.length) throw new HttpsError("invalid-argument", errors.join("; "));
   const now = Date.now();
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(refs.config());
+    const snap = await tx.get(R.config());
     const before = mergeConfig(snap.data());
     const after = mergeConfig({ ...before, ...(patch as object) });
-    tx.set(refs.config(), after);
+    tx.set(R.config(), after);
     const changed = Object.fromEntries(
       Object.keys(patch).map((k) => [k, { from: before[k as keyof typeof before], to: after[k as keyof typeof after] }]),
     );
-    tx.set(auditRef(), auditEntry(adminId, "updateConfig", "config/global", { changed }, now));
+    tx.set(auditRef(), auditEntry(adminId, "updateConfig", "config/global", { changed }, now, serverId));
     return after;
   });
 });
@@ -28,21 +28,21 @@ export const updateConfig = gameCall(async (req) => {
  * last price, the stock is removed from trading, and the account is deactivated.
  */
 export const delistPlayer = gameCall(async (req) => {
-  const adminId = await requireAdmin(req);
-  const uid = reqString(asObject(req.data), "uid", 128);
+  const { uid: adminId, serverId, R, data } = await gameCtx(req, { admin: true });
+  const uid = reqString(data, "uid", 128);
   const now = Date.now();
   return db.runTransaction(async (tx) => {
-    const { state } = await readState(tx, now);
+    const { state } = await readState(tx, R, now);
     const [stockSnap, playerSnap, holdersSnap] = await Promise.all([
-      tx.get(refs.stock(uid)),
-      tx.get(refs.player(uid)),
-      tx.get(db.collection("holdings").where("stockId", "==", uid)),
+      tx.get(R.stock(uid)),
+      tx.get(R.player(uid)),
+      tx.get(R.col("holdings").where("stockId", "==", uid)),
     ]);
     if (!stockSnap.exists || !playerSnap.exists) throw new HttpsError("not-found", "Player not found.");
     const stock = stockSnap.data() as Stock;
     if (!stock.listed) throw new HttpsError("failed-precondition", "Already delisted.");
     const holders = holdersSnap.docs.map((d) => d.data() as Holding);
-    const holderSnaps = await Promise.all(holders.map((h) => tx.get(refs.player(h.uid))));
+    const holderSnaps = await Promise.all(holders.map((h) => tx.get(R.player(h.uid))));
 
     const payouts: { uid: string; shares: number; cash: number }[] = [];
     holderSnaps.forEach((s, i) => {
@@ -52,13 +52,13 @@ export const delistPlayer = gameCall(async (req) => {
         tx.update(s.ref, { cash: (s.data() as Player).cash + cash });
         payouts.push({ uid: h.uid, shares: h.shares, cash });
       }
-      tx.delete(refs.holding(h.uid, uid));
+      tx.delete(R.holding(h.uid, uid));
     });
 
-    tx.update(refs.stock(uid), { listed: false, delistedAt: now });
-    tx.update(refs.player(uid), { isActive: false });
+    tx.update(R.stock(uid), { listed: false, delistedAt: now });
+    tx.update(R.player(uid), { isActive: false });
 
-    const postRef = db.collection("posts").doc();
+    const postRef = R.col("posts").doc();
     const post: Post = {
       id: postRef.id,
       authorId: "system",
@@ -75,7 +75,7 @@ export const delistPlayer = gameCall(async (req) => {
       createdAt: now,
     };
     tx.set(postRef, post);
-    tx.set(auditRef(), auditEntry(adminId, "delistPlayer", uid, { displayName: stock.displayName, price: stock.price, payouts }, now));
+    tx.set(auditRef(), auditEntry(adminId, "delistPlayer", uid, { displayName: stock.displayName, price: stock.price, payouts }, now, serverId));
     return { payouts };
   });
 });
@@ -85,9 +85,9 @@ export const delistPlayer = gameCall(async (req) => {
  * scheduled time as it is (edit it with setCloseTime if needed).
  */
 export const runWeeklyClose = gameCall({ timeoutSeconds: 300 }, async (req) => {
-  const adminId = await requireAdmin(req);
-  const expectedWeek = reqNumber(asObject(req.data), "expectedWeek");
-  return closeWeek({ trigger: "admin", actorId: adminId, expectedWeek });
+  const { uid: adminId, R, data } = await gameCtx(req, { admin: true });
+  const expectedWeek = reqNumber(data, "expectedWeek");
+  return closeWeek(R, { trigger: "admin", actorId: adminId, expectedWeek });
 });
 
 /**

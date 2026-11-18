@@ -16,7 +16,7 @@ import {
   type Trade,
   type TradeSide,
 } from "@fsm/shared";
-import { gameCall, asObject, db, optString, readConfig, readState, refs, reqNumber, reqString, requireAuth } from "./common";
+import { gameCall, db, gameCtx, optString, readConfig, readState, reqNumber, reqString, type Refs } from "./common";
 import { announceTrade, withHoldingStats } from "./marketEvents";
 
 export function tradeSummary(t: Pick<Trade, "traderName" | "side" | "shares" | "stockName" | "cashAmount">): string {
@@ -32,8 +32,7 @@ export function tradeSummary(t: Pick<Trade, "traderName" | "side" | "shares" | "
  * Optional postText creates a post linked to this trade (§7).
  */
 export const trade = gameCall(async (req) => {
-  const uid = requireAuth(req);
-  const data = asObject(req.data);
+  const { uid, R, data } = await gameCtx(req);
   const stockId = reqString(data, "stockId", 128);
   const side = data.side as TradeSide;
   if (side !== "buy" && side !== "sell") throw new HttpsError("invalid-argument", "side must be buy or sell.");
@@ -44,12 +43,12 @@ export const trade = gameCall(async (req) => {
   const now = Date.now();
 
   return db.runTransaction(async (tx) => {
-    const cfg = await readConfig(tx);
-    const { state, exists: stateExists } = await readState(tx, now);
+    const cfg = await readConfig(tx, R);
+    const { state, exists: stateExists } = await readState(tx, R, now);
     const [playerSnap, stockSnap, holdingSnap] = await Promise.all([
-      tx.get(refs.player(uid)),
-      tx.get(refs.stock(stockId)),
-      tx.get(refs.holding(uid, stockId)),
+      tx.get(R.player(uid)),
+      tx.get(R.stock(stockId)),
+      tx.get(R.holding(uid, stockId)),
     ]);
     if (!playerSnap.exists) throw new HttpsError("permission-denied", "You're not an approved player.");
     const player = playerSnap.data() as Player;
@@ -60,7 +59,7 @@ export const trade = gameCall(async (req) => {
     if (stock.ownerId === uid) throw new HttpsError("permission-denied", "You can't trade your own stock.");
     if (postText && postText.length > cfg.maxPostLength) throw new HttpsError("invalid-argument", `Post must be at most ${cfg.maxPostLength} characters.`);
     // Holdings from before cost tracking get it rebuilt from their trades (a read, so before any writes).
-    const holding = await withHoldingStats(tx, holdingSnap.exists ? (holdingSnap.data() as Holding) : null);
+    const holding = await withHoldingStats(tx, R, holdingSnap.exists ? (holdingSnap.data() as Holding) : null);
 
     const heldShares = holding?.shares ?? 0;
     let newCash: number;
@@ -118,22 +117,22 @@ export const trade = gameCall(async (req) => {
     }
 
     const tick = priceTick(stock, tradeData.priceAfter, state.currentWeek);
-    applyPool(tx, stock, pool.cash, pool.shares, tradeData.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
+    applyPool(tx, R, stock, pool.cash, pool.shares, tradeData.priceAfter, tick.patch, { by: uid, at: now, week: state.currentWeek });
 
     // Wallet + holding.
-    tx.update(refs.player(uid), { cash: newCash, lastActiveAt: now, isIdle: false });
-    if (nextHolding.shares <= SHARE_EPSILON) tx.delete(refs.holding(uid, stockId));
-    else tx.set(refs.holding(uid, stockId), { uid, stockId, ...nextHolding, updatedAt: now });
+    tx.update(R.player(uid), { cash: newCash, lastActiveAt: now, isIdle: false });
+    if (nextHolding.shares <= SHARE_EPSILON) tx.delete(R.holding(uid, stockId));
+    else tx.set(R.holding(uid, stockId), { uid, stockId, ...nextHolding, updatedAt: now });
 
     // Fee → prize pool.
     const nextState = { ...state, prizePool: state.prizePool + tradeData.fee, weekFees: state.weekFees + tradeData.fee };
-    if (stateExists) tx.update(refs.state(), { prizePool: nextState.prizePool, weekFees: nextState.weekFees });
-    else tx.set(refs.state(), nextState);
+    if (stateExists) tx.update(R.state(), { prizePool: nextState.prizePool, weekFees: nextState.weekFees });
+    else tx.set(R.state(), nextState);
 
-    const tradeRef = db.collection("trades").doc();
+    const tradeRef = R.col("trades").doc();
     let linkedPostId: string | null = null;
     if (postText) {
-      const postRef = db.collection("posts").doc();
+      const postRef = R.col("posts").doc();
       linkedPostId = postRef.id;
       const post: Post = {
         id: postRef.id,
@@ -155,7 +154,7 @@ export const trade = gameCall(async (req) => {
     const tradeDoc: Trade = { id: tradeRef.id, ...tradeData, linkedPostId };
     tx.set(tradeRef, tradeDoc);
 
-    announceTrade(tx, {
+    announceTrade(tx, R, {
       kind: side,
       traderName: player.displayName,
       stock,
@@ -171,8 +170,8 @@ export const trade = gameCall(async (req) => {
 });
 
 /** Apply a trade's pool change. `mark` identifies the trade for the onStockTraded trigger. */
-export function applyPool(tx: Transaction, stock: Stock, poolCash: number, poolShares: number, price: number, extra: Partial<Stock>, mark: StockTradeMark) {
-  tx.update(refs.stock(stock.id), {
+export function applyPool(tx: Transaction, R: Refs, stock: Stock, poolCash: number, poolShares: number, price: number, extra: Partial<Stock>, mark: StockTradeMark) {
+  tx.update(R.stock(stock.id), {
     lastTrade: mark,
     poolCash,
     poolShares,

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useEffect, useRef } from "react";
 import { doc } from "firebase/firestore";
 import { reportWinners, type WeeklyReport } from "@fsm/shared";
@@ -10,7 +10,7 @@ import { fireConfetti } from "@/lib/confetti";
 import { changeClass, gbp, pct, profileHref } from "@/lib/format";
 import { playSound } from "@/lib/sound";
 import { Avatar } from "./Avatar";
-import { useGame } from "./GameProvider";
+import { useGame, usePaths } from "./GameProvider";
 
 export function reportId(week: number): string {
   return `week-${String(week).padStart(4, "0")}`;
@@ -23,7 +23,8 @@ export function reportId(week: number): string {
  */
 export function ResultsModal({ week, onClose }: { week: number; onClose: () => void }) {
   const { me } = useGame();
-  const report = useDoc<WeeklyReport>(doc(fb().db, "weeklyReports", reportId(week)), [week]);
+  const paths = usePaths();
+  const report = useDoc<WeeklyReport>(doc(fb().db, `${paths.weeklyReports}/${reportId(week)}`), [week]);
   const ref = useRef<HTMLDialogElement>(null);
   const celebrated = useRef(false);
 

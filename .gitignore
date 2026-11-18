@@ -14,3 +14,6 @@ ui-debug.log
 next-env.d.ts
 .secret.local
 functions/.secret.local
+
+# Local migration backups (contain player emails and photos): never commit
+migration-backup/

@@ -1,10 +1,11 @@
 "use client";
 
 import { Suspense, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useServerRouter } from "@/components/ServerLink";
 import { collection, limit, orderBy, query, where } from "firebase/firestore";
 import type { Trade } from "@fsm/shared";
-import { useGame } from "@/components/GameProvider";
+import { useGame, usePaths } from "@/components/GameProvider";
 import { Feed } from "@/components/Feed";
 import { PostComposer } from "@/components/PostComposer";
 import { PriceChart } from "@/components/PriceChart";
@@ -33,7 +34,7 @@ type Tab = "stock" | "player";
 
 function StockView() {
   const params = useSearchParams();
-  const router = useRouter();
+  const router = useServerRouter();
   const id = params.get("id") ?? "";
   const tab: Tab = params.get("tab") === "player" ? "player" : "stock";
   const { stockById, holdings, playerById, me, isAdmin, photoOf, tickerOf } = useGame();
@@ -61,8 +62,9 @@ function StockView() {
     }
   }
 
+  const paths = usePaths();
   const history = useQuery<Trade>(
-    id ? query(collection(fb().db, "trades"), where("stockId", "==", id), orderBy("createdAt", "desc"), limit(300)) : null,
+    id ? query(collection(fb().db, paths.trades), where("stockId", "==", id), orderBy("createdAt", "desc"), limit(300)) : null,
     [id],
   );
 

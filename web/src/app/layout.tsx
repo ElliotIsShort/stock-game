@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { ClientEffects } from "@/components/ClientEffects";
-import { GameProvider } from "@/components/GameProvider";
-import { Shell } from "@/components/Shell";
+import { GameRoot } from "@/components/GameRoot";
+import { ServerProvider } from "@/components/ServerProvider";
 import { THEME_BOOT_SCRIPT } from "@/lib/prefs";
 import "./globals.css";
 
@@ -29,9 +29,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body>
         <ClientEffects />
-        <GameProvider>
-          <Shell>{children}</Shell>
-        </GameProvider>
+        {/* useSearchParams (the ?s= server) needs a Suspense boundary in a static export. */}
+        <Suspense fallback={<main className="page"><p className="muted">Loading…</p></main>}>
+          <ServerProvider>
+            <GameRoot>{children}</GameRoot>
+          </ServerProvider>
+        </Suspense>
       </body>
     </html>
   );

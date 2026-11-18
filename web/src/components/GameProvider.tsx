@@ -1,14 +1,16 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import type { User } from "firebase/auth";
 import { collection, doc, limit, orderBy, query, where } from "firebase/firestore";
 import {
   assignTickers,
   computeStandings,
   DEFAULT_CONFIG,
   mergeConfig,
+  serverPaths,
   type AppNotification,
+  type Landing,
   type PriceAlert,
   type Recap,
   type SeenSnapshot,
@@ -17,13 +19,16 @@ import {
   type Holding,
   type Player,
   type Registration,
+  type ServerDoc,
   type Short,
   type Stock,
   type StockPhoto,
 } from "@fsm/shared";
 import { fb, firebaseConfigured } from "@/lib/firebase";
+import { storageKey } from "@/lib/serverStore";
 import { useDoc, useQuery } from "@/lib/hooks";
-import { api } from "@/lib/api";
+import { api, setApiServer } from "@/lib/api";
+import { useServer } from "./ServerProvider";
 
 export interface PlayerView extends Player {
   netWorth: number;
@@ -33,7 +38,7 @@ export interface PlayerView extends Player {
   rank: number | null;
 }
 
-interface GameContextValue {
+export interface GameContextValue {
   configured: boolean;
   authLoading: boolean;
   user: User | null;
@@ -77,12 +82,29 @@ interface GameContextValue {
   notifications: AppNotification[];
   /** Your active price alerts. */
   myAlerts: PriceAlert[];
+  /** The server (game) being viewed, or null when none is resolved (picker, or not a member of anything). */
+  serverId: string | null;
+  /** Display name, status and so on: only ever shown to people in two or more servers (and the admin). */
+  server: ServerDoc | null;
+  /** All paths for this server's collections (`serverPaths`); null without a server. */
+  paths: ReturnType<typeof serverPaths> | null;
+  /** Two or more memberships: the only users who may see anything server-related. */
+  showServerUi: boolean;
+  memberships: string[];
+  landing: Landing;
+  switchServer: (id: string) => void;
   /** Admin kill switch is on: every mutation is refused (the game is being upgraded). */
   maintenance: boolean;
 }
 
-const GameContext = createContext<GameContextValue | null>(null);
-const PREVIEW_KEY = "fsm:viewAsPlayer";
+export const GameContext = createContext<GameContextValue | null>(null);
+
+/** This server's collection paths. Only call under a resolved server (all game pages are). */
+export function usePaths(): ReturnType<typeof serverPaths> {
+  const { paths } = useGame();
+  if (!paths) throw new Error("usePaths needs a resolved server");
+  return paths;
+}
 
 export function useGame(): GameContextValue {
   const ctx = useContext(GameContext);
@@ -90,68 +112,70 @@ export function useGame(): GameContextValue {
   return ctx;
 }
 
-export function GameProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(firebaseConfigured);
-
-  useEffect(() => {
-    if (!firebaseConfigured) return;
-    return onAuthStateChanged(fb().auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-  }, []);
+/**
+ * Game data for ONE server. Remounted (keyed by server id) whenever the server
+ * changes, so every subscription is torn down and re-created and no cached
+ * state from one server can ever render under another.
+ */
+export function GameProvider({ children, serverId }: { children: ReactNode; serverId: string | null }) {
+  const sv = useServer();
+  const { user, authLoading, registration, isRealAdmin: realAdmin } = sv;
+  // Set during render (not an effect): children's effects run before their parent's.
+  setApiServer(serverId);
+  const paths = useMemo(() => (serverId ? serverPaths(serverId) : null), [serverId]);
 
   const uid = user?.uid ?? null;
   // Never initialise Firebase during the static build's prerender.
   const db = firebaseConfigured && typeof window !== "undefined" ? fb().db : null;
-
-  const registration = useDoc<Registration>(db && uid ? doc(db, "registrations", uid) : null, [uid]);
-  const adminDoc = useDoc<object>(db && uid ? doc(db, "admins", uid) : null, [uid]);
-  const meDoc = useDoc<Player>(db && uid ? doc(db, "players", uid) : null, [uid]);
+  const meDoc = useDoc<Player>(db && uid && paths ? doc(db, paths.player(uid)) : null, [uid, serverId]);
+  const serverDoc = useDoc<ServerDoc>(db && uid && paths ? doc(db, paths.root) : null, [uid, serverId]);
 
   // "View as player": admins can hide every admin affordance to see what players see.
-  // UI-only — the server still treats them as an admin. Remembered for the browser tab.
-  const realAdmin = Boolean(adminDoc.data);
+  // UI-only — the server still treats them as an admin. Remembered for the browser tab, per server.
   const [previewAsPlayer, setPreviewState] = useState(false);
   useEffect(() => {
-    setPreviewState(sessionStorage.getItem(PREVIEW_KEY) === "1");
-  }, []);
-  const setPreviewAsPlayer = useCallback((on: boolean) => {
-    if (on) sessionStorage.setItem(PREVIEW_KEY, "1");
-    else sessionStorage.removeItem(PREVIEW_KEY);
-    setPreviewState(on);
-  }, []);
+    setPreviewState(serverId ? sessionStorage.getItem(storageKey.viewAsPlayer(serverId)) === "1" : false);
+  }, [serverId]);
+  const setPreviewAsPlayer = useCallback(
+    (on: boolean) => {
+      if (serverId) {
+        if (on) sessionStorage.setItem(storageKey.viewAsPlayer(serverId), "1");
+        else sessionStorage.removeItem(storageKey.viewAsPlayer(serverId));
+      }
+      setPreviewState(on);
+    },
+    [serverId],
+  );
   const previewing = realAdmin && previewAsPlayer;
   const isAdmin = realAdmin && !previewing;
   // An admin with no player account previews what a not-yet-approved signup sees.
-  const isMember = Boolean(meDoc.data) || isAdmin;
-  const loadingMembership = registration.loading || adminDoc.loading || meDoc.loading;
-  const liveDb = db && isMember ? db : null;
+  const isMember = serverId !== null && (Boolean(meDoc.data) || isAdmin);
+  const loadingMembership = sv.loading || meDoc.loading;
+  const liveDb = db && paths && isMember ? db : null;
   const on = Boolean(liveDb);
 
   const maintenanceDoc = useDoc<{ enabled?: boolean }>(db && uid ? doc(db, "system", "maintenance") : null, [uid]);
 
-  const stocksQ = useQuery<Stock>(liveDb ? collection(liveDb, "stocks") : null, [on]);
-  const playersQ = useQuery<Player>(liveDb ? collection(liveDb, "players") : null, [on]);
-  const holdingsQ = useQuery<Holding>(liveDb ? collection(liveDb, "holdings") : null, [on]);
-  const photosQ = useQuery<StockPhoto>(liveDb ? collection(liveDb, "photos") : null, [on]);
+  const stocksQ = useQuery<Stock>(liveDb ? collection(liveDb, paths!.stocks) : null, [on, serverId]);
+  const playersQ = useQuery<Player>(liveDb ? collection(liveDb, paths!.players) : null, [on, serverId]);
+  const holdingsQ = useQuery<Holding>(liveDb ? collection(liveDb, paths!.holdings) : null, [on, serverId]);
+  const photosQ = useQuery<StockPhoto>(liveDb ? collection(liveDb, paths!.photos) : null, [on, serverId]);
   // All open shorts: needed so the leaderboard can offset everyone's net worth,
   // not just the signed-in player's. Members may read all shorts.
   const openShortsQ = useQuery<Short>(
-    liveDb ? query(collection(liveDb, "shorts"), where("status", "==", "open")) : null,
-    [on],
+    liveDb ? query(collection(liveDb, paths!.shorts), where("status", "==", "open")) : null,
+    [on, serverId],
   );
-  const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, "meta", "state") : null, [on]);
-  const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, "config", "global") : null, [on]);
+  const stateDoc = useDoc<GameState>(liveDb ? doc(liveDb, paths!.state) : null, [on, serverId]);
+  const configDoc = useDoc<Partial<GameConfig>>(liveDb ? doc(liveDb, paths!.config) : null, [on, serverId]);
 
   const notificationsQ = useQuery<AppNotification>(
-    liveDb && uid ? query(collection(liveDb, "notifications"), where("uid", "==", uid), orderBy("createdAt", "desc"), limit(20)) : null,
-    [on, uid],
+    liveDb && uid ? query(collection(liveDb, paths!.notifications), where("uid", "==", uid), orderBy("createdAt", "desc"), limit(20)) : null,
+    [on, serverId, uid],
   );
   const alertsQ = useQuery<PriceAlert>(
-    liveDb && uid ? query(collection(liveDb, "alerts"), where("uid", "==", uid), where("status", "==", "active")) : null,
-    [on, uid],
+    liveDb && uid ? query(collection(liveDb, paths!.alerts), where("uid", "==", uid), where("status", "==", "active")) : null,
+    [on, serverId, uid],
   );
 
   // Record activity once per page load. The recap and the previous-session
@@ -162,10 +186,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [sessionKnown, setSessionKnown] = useState(false);
   const touched = useRef<string | null>(null);
   useEffect(() => {
-    if (!meDoc.data || !uid || touched.current === uid) return;
+    if (!meDoc.data || !uid || !serverId || touched.current === uid) return;
     touched.current = uid;
-    const recapKey = `fsm:recap:${uid}`;
-    const prevKey = `fsm:previous:${uid}`;
+    const recapKey = storageKey.recap(serverId, uid);
+    const prevKey = storageKey.previous(serverId, uid);
     const storedRecap = sessionStorage.getItem(recapKey);
     if (storedRecap) setRecap(JSON.parse(storedRecap) as Recap);
     const storedPrev = sessionStorage.getItem(prevKey);
@@ -187,11 +211,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
       .finally(() => setSessionKnown(true));
-  }, [meDoc.data, uid]);
+  }, [meDoc.data, uid, serverId]);
   const dismissRecap = useCallback(() => {
-    if (uid) sessionStorage.removeItem(`fsm:recap:${uid}`);
+    if (uid && serverId) sessionStorage.removeItem(storageKey.recap(serverId, uid));
     setRecap(null);
-  }, [uid]);
+  }, [uid, serverId]);
 
   const marketReady = on && !stocksQ.loading && !playersQ.loading && !holdingsQ.loading && !openShortsQ.loading;
 
@@ -213,7 +237,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       configured: firebaseConfigured,
       authLoading,
       user,
-      registration: registration.data,
+      registration,
       me: meDoc.data,
       isAdmin,
       isRealAdmin: realAdmin,
@@ -221,7 +245,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setPreviewAsPlayer,
       isMember,
       loadingMembership,
-      signOut: () => signOut(fb().auth),
+      signOut: sv.signOut,
       config: configDoc.data ? mergeConfig(configDoc.data) : DEFAULT_CONFIG,
       state: stateDoc.data,
       stocks,
@@ -240,9 +264,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
       sessionKnown,
       notifications: notificationsQ.data,
       myAlerts: alertsQ.data,
+      serverId,
+      server: serverDoc.data,
+      paths,
+      showServerUi: sv.showServerUi,
+      memberships: sv.memberships,
+      landing: sv.landing,
+      switchServer: sv.switchServer,
       maintenance: maintenanceDoc.data?.enabled === true,
     };
-  }, [authLoading, user, uid, registration.data, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data, marketReady, recap, dismissRecap, previousSession, sessionKnown, notificationsQ.data, alertsQ.data, maintenanceDoc.data]);
+  }, [authLoading, user, uid, registration, sv.signOut, serverId, serverDoc.data, paths, sv.showServerUi, sv.memberships, sv.landing, sv.switchServer, meDoc.data, isAdmin, realAdmin, previewing, setPreviewAsPlayer, isMember, loadingMembership, configDoc.data, stateDoc.data, stocksQ.data, playersQ.data, holdingsQ.data, photosQ.data, openShortsQ.data, marketReady, recap, dismissRecap, previousSession, sessionKnown, notificationsQ.data, alertsQ.data, maintenanceDoc.data]);
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }

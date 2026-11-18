@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useMemo } from "react";
 import { collection, orderBy, query } from "firebase/firestore";
 import { reportWinners, type PrizeWinner, type WeeklyReport } from "@fsm/shared";
 import { BarChart } from "@/components/BarChart";
-import { useGame } from "@/components/GameProvider";
+import { useGame, usePaths } from "@/components/GameProvider";
 import { LineChart } from "@/components/LineChart";
 import { fb } from "@/lib/firebase";
 import { useQuery } from "@/lib/hooks";
@@ -21,7 +21,8 @@ function winnersSummary(winners: PrizeWinner[]): string {
 
 export default function ReportsPage() {
   const { stocks } = useGame();
-  const reports = useQuery<WeeklyReport>(query(collection(fb().db, "weeklyReports"), orderBy("week", "desc")), []);
+  const paths = usePaths();
+  const reports = useQuery<WeeklyReport>(query(collection(fb().db, paths.weeklyReports), orderBy("week", "desc")), []);
 
   const recent = useMemo(() => [...reports.data].slice(0, CHART_WEEKS).reverse(), [reports.data]);
 

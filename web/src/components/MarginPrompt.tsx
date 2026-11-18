@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useMemo, useState } from "react";
 import { formatCloseTime, marginStatus, planLiquidation, quoteSell, type MarginShort, type MarginStatus } from "@fsm/shared";
 import { api, errorMessage } from "@/lib/api";

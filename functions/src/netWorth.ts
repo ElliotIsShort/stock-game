@@ -1,11 +1,11 @@
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
-import type { DocumentReference, DocumentSnapshot, QuerySnapshot } from "firebase-admin/firestore";
+import type { DocumentSnapshot, QuerySnapshot } from "firebase-admin/firestore";
 import {
   computeStandings,
   mergeConfig,
+  isServerCode,
   pushSeriesPoint,
-  seriesDocId,
   type GameConfig,
   type Holding,
   type NetWorthSeries,
@@ -13,10 +13,9 @@ import {
   type Short,
   type Stock,
 } from "@fsm/shared";
-import { db, inMaintenance, refs } from "./common";
+import { db, inMaintenance, refs, type Refs } from "./common";
 import { reevaluateMargin } from "./margin";
 
-export const seriesRef = (uid: string, week: number) => db.doc(`netWorthSeries/${seriesDocId(uid, week)}`) as DocumentReference<NetWorthSeries>;
 
 /** Firestore bills at least one read per query, even an empty one, and one per document returned. */
 const queryReads = (s: QuerySnapshot) => Math.max(1, s.size);
@@ -46,32 +45,32 @@ export interface AffectedWorld {
  *   1 (config) + H + S + A + ΣA + R   (each query costs at least 1).
  * The traded stock itself comes from the trigger event, not a read.
  */
-export async function loadAffected(stock: Stock, traderId: string): Promise<AffectedWorld> {
+export async function loadAffected(R: Refs, stock: Stock, traderId: string): Promise<AffectedWorld> {
   const [cfgSnap, holdersSnap, shortsSnap] = await Promise.all([
-    refs.config().get(),
-    db.collection("holdings").where("stockId", "==", stock.id).get(),
-    db.collection("shorts").where("status", "==", "open").get(),
+    R.config().get(),
+    R.col("holdings").where("stockId", "==", stock.id).get(),
+    R.col("shorts").where("status", "==", "open").get(),
   ]);
   let reads = 1 + queryReads(holdersSnap) + queryReads(shortsSnap);
   const cfg = mergeConfig(cfgSnap.data());
   const openShorts = shortsSnap.docs.map((d) => d.data() as Short);
 
   const uids = [...new Set([traderId, ...holdersSnap.docs.map((d) => (d.data() as Holding).uid), ...openShorts.filter((s) => s.stockId === stock.id).map((s) => s.ownerId)])];
-  const playerSnaps: DocumentSnapshot[] = uids.length ? await db.getAll(...uids.map((u) => refs.player(u))) : [];
+  const playerSnaps: DocumentSnapshot[] = uids.length ? await db.getAll(...uids.map((u) => R.player(u))) : [];
   reads += playerSnaps.length;
   const players = playerSnaps.filter((s) => s.exists).map((s) => s.data() as Player);
 
   const holdings: Holding[] = [];
   for (let i = 0; i < players.length; i += IN_LIMIT) {
     const chunk = players.slice(i, i + IN_LIMIT).map((p) => p.uid);
-    const snap = await db.collection("holdings").where("uid", "in", chunk).get();
+    const snap = await R.col("holdings").where("uid", "in", chunk).get();
     reads += queryReads(snap);
     holdings.push(...snap.docs.map((d) => d.data() as Holding));
   }
 
   const mine = new Set(players.map((p) => p.uid));
   const stockIds = [...new Set([...holdings.map((h) => h.stockId), ...openShorts.filter((s) => mine.has(s.ownerId)).map((s) => s.stockId)])].filter((id) => id !== stock.id);
-  const stockSnaps = stockIds.length ? await db.getAll(...stockIds.map((id) => refs.stock(id))) : [];
+  const stockSnaps = stockIds.length ? await db.getAll(...stockIds.map((id) => R.stock(id))) : [];
   reads += stockSnaps.length;
   const stocks = [stock, ...stockSnaps.filter((s) => s.exists).map((s) => s.data() as Stock)];
 
@@ -82,9 +81,9 @@ export async function loadAffected(stock: Stock, traderId: string): Promise<Affe
  * Coalesce one net-worth point into a player's series doc for `week`. A
  * transaction (1 read, ≤1 write) so two triggers can't clobber each other.
  */
-export async function recordSeriesPoint(uid: string, week: number, v: number, t: number, windowMs: number): Promise<{ reads: number; writes: number }> {
+export async function recordSeriesPoint(R: Refs, uid: string, week: number, v: number, t: number, windowMs: number): Promise<{ reads: number; writes: number }> {
   return db.runTransaction(async (tx) => {
-    const ref = seriesRef(uid, week);
+    const ref = R.series(uid, week);
     const snap = await tx.get(ref);
     const cur = snap.data();
     const next = pushSeriesPoint({ points: cur?.points ?? [], openSince: cur?.openSince }, { t, v }, windowMs);
@@ -107,7 +106,7 @@ export async function recordSeriesPoint(uid: string, week: number, v: number, t:
  * Cost per trade (see loadAffected): 1 + H + S + A + ΣA + R reads to load,
  * plus A for the series transactions; A writes at most. Logged as `reads`.
  */
-export const onStockTraded = onDocumentUpdated({ document: "stocks/{id}", retry: false }, async (event) => {
+export const onStockTraded = onDocumentUpdated({ document: "servers/{serverId}/stocks/{id}", retry: false }, async (event) => {
   const before = event.data?.before.data() as Stock | undefined;
   const after = event.data?.after.data() as Stock | undefined;
   const mark = after?.lastTrade;
@@ -115,15 +114,18 @@ export const onStockTraded = onDocumentUpdated({ document: "stocks/{id}", retry:
   if (before.lastTrade && before.lastTrade.at === mark.at && before.lastTrade.by === mark.by) return;
   if (await inMaintenance()) return;
 
-  const world = await loadAffected(after, mark.by);
+  const serverId = event.params.serverId;
+  if (!isServerCode(serverId)) return;
+  const R = refs(serverId);
+  const world = await loadAffected(R, after, mark.by);
   // Taken after the reads, so a later point never carries older data.
   const t = Date.now();
   const standings = computeStandings(world.players, world.stocks, world.holdings, world.openShorts, world.cfg.tradingFeePct);
   const windowMs = world.cfg.netWorthTickMinutes * 60_000;
   const results = await Promise.all(
     world.players.map((p) =>
-      recordSeriesPoint(p.uid, mark.week, standings.get(p.uid)!.netWorth, t, windowMs).catch((err) => {
-        logger.error("Net-worth point failed", { uid: p.uid, err });
+      recordSeriesPoint(R, p.uid, mark.week, standings.get(p.uid)!.netWorth, t, windowMs).catch((err) => {
+        logger.error("Net-worth point failed", { serverId, uid: p.uid, err });
         return { reads: 1, writes: 0 };
       }),
     ),
@@ -139,12 +141,12 @@ export const onStockTraded = onDocumentUpdated({ document: "stocks/{id}", retry:
     .map((p) => p.uid);
   for (const uid of marginUids) {
     try {
-      const event = await reevaluateMargin(uid, world.openShorts, stockOf, world.cfg, mark.week);
+      const event = await reevaluateMargin(R, uid, world.openShorts, stockOf, world.cfg, mark.week);
       reads += 1;
       if (event !== null) writes += 1;
     } catch (err) {
-      logger.error("Margin re-evaluation failed", { uid, err });
+      logger.error("Margin re-evaluation failed", { serverId, uid, err });
     }
   }
-  logger.info("onStockTraded", { stockId: after.id, affected: world.players.length, margin: marginUids.length, reads, writes });
+  logger.info("onStockTraded", { serverId, stockId: after.id, affected: world.players.length, margin: marginUids.length, reads, writes });
 });

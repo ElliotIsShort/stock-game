@@ -5,7 +5,7 @@
  * - Everything cross-origin (Firestore, Cloud Functions, Google sign-in) is left alone.
  * Bump VERSION to drop old caches.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `stonker-${VERSION}`;
 const SCOPE = new URL(self.registration.scope).pathname;
 

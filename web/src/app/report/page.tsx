@@ -4,9 +4,10 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { doc } from "firebase/firestore";
 import { reportWinners, type WeeklyReport } from "@fsm/shared";
+import { usePaths } from "@/components/GameProvider";
 import { fb } from "@/lib/firebase";
 import { useDoc } from "@/lib/hooks";
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { ResultsModal } from "@/components/ResultsModal";
 import { changeClass, gbp, pct, profileHref } from "@/lib/format";
 
@@ -19,8 +20,11 @@ export default function ReportPage() {
 }
 
 function ReportView() {
-  const id = useSearchParams().get("id") ?? "";
-  const report = useDoc<WeeklyReport>(id ? doc(fb().db, "weeklyReports", id) : null, [id]);
+  const raw = useSearchParams().get("id") ?? "";
+  // Report ids are always `week-NNNN`; anything else is never turned into a path.
+  const id = /^week-\d{4}$/.test(raw) ? raw : "";
+  const paths = usePaths();
+  const report = useDoc<WeeklyReport>(id ? doc(fb().db, `${paths.weeklyReports}/${id}`) : null, [id]);
   const [copied, setCopied] = useState<string | null>(null);
   const [showResults, setShowResults] = useState(false);
 

@@ -1,6 +1,6 @@
 import { FieldValue, type Transaction } from "firebase-admin/firestore";
 import { bankruptcyMessage, settleDebt, type Creditor, type Holding, type Player } from "@fsm/shared";
-import { auditEntry, auditRef, refs } from "./common";
+import { auditEntry, auditRef, type Refs } from "./common";
 import { enqueueDiscord } from "./discord";
 import type { PoolLedger } from "./margin";
 
@@ -20,6 +20,7 @@ import type { PoolLedger } from "./margin";
  */
 export function applyBankruptcySettlement(
   tx: Transaction,
+  R: Refs,
   debtor: Player,
   debtorHoldings: Holding[],
   ledger: PoolLedger,
@@ -42,22 +43,22 @@ export function applyBankruptcySettlement(
     const newShares = s.poolShares + sale.shares;
     const newCash = (s.poolCash * s.poolShares) / newShares;
     ledger.apply(sale.stockId, newCash, newShares, newCash / newShares);
-    tx.delete(refs.holding(debtor.uid, sale.stockId));
+    tx.delete(R.holding(debtor.uid, sale.stockId));
   }
 
   // Pay creditors.
   for (const p of result.payouts) {
-    if (p.paid > 0) tx.update(refs.player(p.uid), { cash: FieldValue.increment(p.paid) });
+    if (p.paid > 0) tx.update(R.player(p.uid), { cash: FieldValue.increment(p.paid) });
   }
 
   // Debtor ends with their remaining cash; bankrupt players are deactivated.
-  tx.update(refs.player(debtor.uid), {
+  tx.update(R.player(debtor.uid), {
     cash: result.remainingCash,
     ...(result.bankrupt ? { isActive: false, bankruptAt: now } : {}),
     ...debtorExtra,
   });
 
-  if (result.bankrupt) enqueueDiscord(tx, "high", "bankruptcy", bankruptcyMessage(debtor.uid, debtor.displayName, debt, result.shortfall), now);
+  if (result.bankrupt) enqueueDiscord(tx, R, "high", "bankruptcy", bankruptcyMessage(debtor.uid, debtor.displayName, debt, result.shortfall), now);
   tx.set(
     auditRef(),
     auditEntry("system", result.bankrupt ? "bankruptcy" : "debtSettled", debtor.uid, {
@@ -66,7 +67,7 @@ export function applyBankruptcySettlement(
       shortfall: result.shortfall,
       payouts: result.payouts,
       week,
-    }, now),
+    }, now, R.serverId),
   );
   return result;
 }

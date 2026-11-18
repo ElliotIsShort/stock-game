@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fireConfetti } from "@/lib/confetti";
 import { playSound } from "@/lib/sound";
+import { storageKey } from "@/lib/serverStore";
 import { useGame } from "./GameProvider";
 import { ResultsModal } from "./ResultsModal";
 
@@ -16,7 +17,7 @@ const BANNER_MS = 8000;
  * last visit.
  */
 export function Moments() {
-  const { me, state, playerById, marketReady, previousSession, sessionKnown } = useGame();
+  const { me, state, playerById, marketReady, previousSession, sessionKnown, serverId } = useGame();
   const [resultsWeek, setResultsWeek] = useState<number | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const uid = me?.uid ?? null;
@@ -24,16 +25,16 @@ export function Moments() {
   // Results: the latest close, if it happened since your last session and you haven't seen it on this device.
   const decided = useRef(false);
   useEffect(() => {
-    if (decided.current || !me || !state || !sessionKnown) return;
+    if (decided.current || !me || !state || !sessionKnown || !serverId) return;
     decided.current = true;
     const week = state.currentWeek - 1;
     if (week < 1 || me.joinWeek > week) return;
     if (previousSession && previousSession.week > week) return;
-    const key = `fsm:resultsSeen:${me.uid}`;
+    const key = storageKey.resultsSeen(serverId, me.uid);
     if (Number(localStorage.getItem(key) ?? 0) >= week) return;
     localStorage.setItem(key, String(week));
     setResultsWeek(week);
-  }, [me, state, sessionKnown, previousSession]);
+  }, [me, state, sessionKnown, previousSession, serverId]);
 
   // Taking #1.
   const rank = uid ? (playerById.get(uid)?.rank ?? null) : null;

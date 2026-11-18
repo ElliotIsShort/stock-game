@@ -12,7 +12,7 @@ import {
   type Trade,
   type TradeKind,
 } from "@fsm/shared";
-import { db } from "./common";
+import type { Refs } from "./common";
 import { enqueueDiscord, isBigTrade } from "./discord";
 
 /** Stored ticker, or the default the market would assign (legacy stocks, until backfilled). */
@@ -26,6 +26,7 @@ export function tickerFor(stock: Pick<Stock, "ticker" | "displayName">): string 
  */
 export function announceTrade(
   tx: Transaction,
+  R: Refs,
   a: {
     kind: TradeKind;
     traderName: string;
@@ -43,7 +44,7 @@ export function announceTrade(
 ): void {
   const ticker = tickerFor(a.stock);
   if (isBigTrade(a.cash, state, cfg)) {
-    enqueueDiscord(tx, "normal", "bigTrade", bigTradeMessage({
+    enqueueDiscord(tx, R, "normal", "bigTrade", bigTradeMessage({
       kind: a.kind,
       traderName: a.traderName,
       ownerId: a.stock.ownerId,
@@ -56,8 +57,8 @@ export function announceTrade(
       postText: a.postText,
     }), now);
   }
-  if (a.tick.announceHigh) enqueueDiscord(tx, "normal", "allTimeHigh", recordMessage(a.stock.ownerId, ticker, "high", a.priceAfter), now);
-  if (a.tick.announceLow) enqueueDiscord(tx, "normal", "allTimeLow", recordMessage(a.stock.ownerId, ticker, "low", a.priceAfter), now);
+  if (a.tick.announceHigh) enqueueDiscord(tx, R, "normal", "allTimeHigh", recordMessage(a.stock.ownerId, ticker, "high", a.priceAfter), now);
+  if (a.tick.announceLow) enqueueDiscord(tx, R, "normal", "allTimeLow", recordMessage(a.stock.ownerId, ticker, "low", a.priceAfter), now);
 }
 
 /**
@@ -65,14 +66,14 @@ export function announceTrade(
  * rebuilt from the player's trades in that stock. A read: call it before any
  * of the transaction's writes.
  */
-export async function legacyHoldingStats(tx: Transaction, uid: string, stockId: string): Promise<{ costBasis: number; holdingSince: number }> {
-  const snap = await tx.get(db.collection("trades").where("traderId", "==", uid).where("stockId", "==", stockId));
+export async function legacyHoldingStats(tx: Transaction, R: Refs, uid: string, stockId: string): Promise<{ costBasis: number; holdingSince: number }> {
+  const snap = await tx.get(R.col("trades").where("traderId", "==", uid).where("stockId", "==", stockId));
   const pos = positionFromTrades(snap.docs.map((d) => d.data() as Trade), 0);
   return { costBasis: pos.costBasis, holdingSince: pos.holdingSince ?? 0 };
 }
 
 /** Fill in costBasis/holdingSince on a holding that lacks them (see legacyHoldingStats). */
-export async function withHoldingStats(tx: Transaction, h: Holding | null): Promise<Holding | null> {
+export async function withHoldingStats(tx: Transaction, R: Refs, h: Holding | null): Promise<Holding | null> {
   if (!h || (h.costBasis != null && h.holdingSince != null)) return h;
-  return { ...h, ...(await legacyHoldingStats(tx, h.uid, h.stockId)) };
+  return { ...h, ...(await legacyHoldingStats(tx, R, h.uid, h.stockId)) };
 }

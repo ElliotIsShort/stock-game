@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, startingCash, targetPoolCash } from "@fsm/shared";
-import { call, clientRead, clientWrite, expectCallError, getDoc, makeAdmin, setupPlayers, signUp, wipeEmulators } from "./helpers";
+import { call, clientRead, clientWrite, expectCallError, getDoc, listDocs, makeAdmin, makeServer, setupPlayers, signUp, wipeEmulators } from "./helpers";
 
 beforeEach(wipeEmulators);
 
@@ -10,15 +10,17 @@ describe("registration and approval (§4.3)", () => {
     await call(u, "register", { displayName: "  Alice   Smith " });
     const reg = await getDoc(`registrations/${u.uid}`);
     expect(reg).toMatchObject({ status: "pending", displayName: "Alice Smith" });
-    expect(await getDoc(`players/${u.uid}`)).toBeNull();
+    expect(await getDoc(`users/${u.uid}`)).toBeNull();
+    expect(await listDocs("servers")).toEqual([]);
   });
 
-  it("rejects unauthenticated, duplicate and too-short names", async () => {
+  it("rejects unauthenticated, repeat and too-short registrations (names are checked per server, at approval)", async () => {
     await expectCallError(call(null, "register", { displayName: "Ghost" }), "UNAUTHENTICATED");
     const a = await signUp("a");
     const b = await signUp("b");
     await call(a, "register", { displayName: "Sam" });
-    await expectCallError(call(b, "register", { displayName: "sam" }), "ALREADY_EXISTS");
+    // Two people may register the same name: it only has to be unique inside the server they're approved into.
+    await call(b, "register", { displayName: "sam" });
     await expectCallError(call(b, "register", { displayName: "x" }), "INVALID_ARGUMENT");
     await expectCallError(call(a, "register", { displayName: "Sam" }), "ALREADY_EXISTS");
   });
@@ -27,16 +29,19 @@ describe("registration and approval (§4.3)", () => {
     const a = await signUp("a");
     const b = await signUp("b");
     await call(b, "register", { displayName: "Bob" });
-    await expectCallError(call(a, "approvePlayer", { uid: b.uid }), "PERMISSION_DENIED");
+    await expectCallError(call(a, "approvePlayer", { uid: b.uid, serverId: "123456" }), "PERMISSION_DENIED");
+    await expectCallError(call(a, "createServer", { name: "X", closesAt: Date.now() + 86_400_000 }), "PERMISSION_DENIED");
     await expectCallError(call(a, "rejectPlayer", { uid: b.uid }), "PERMISSION_DENIED");
   });
 
   it("approval atomically creates player, cash and a listed stock with a §2.1-sized pool", async () => {
     const admin = await signUp("admin");
     await makeAdmin(admin);
+    const serverId = await makeServer(admin);
     const u = await signUp("Alice");
     await call(u, "register", { displayName: "Alice" });
     const res = await call(admin, "approvePlayer", { uid: u.uid });
+    expect((await getDoc(`users/${u.uid}`)).serverIds).toEqual([serverId]);
 
     expect(res.startingCash).toBe(DEFAULT_CONFIG.baseStartingCash);
     expect(res.listingPrice).toBe(DEFAULT_CONFIG.baseStockPrice);
@@ -90,6 +95,8 @@ describe("security rules", () => {
     expect(await clientRead(pending, `registrations/${pending.uid}`)).toBe(200);
     expect(await clientRead(pending, `stocks/${alice.uid}`)).toBe(403);
     expect(await clientRead(pending, `players/${alice.uid}`)).toBe(403);
+    expect(await clientRead(pending, `meta/state`)).toBe(403);
+    expect(await clientRead(pending, `config/global`)).toBe(403);
     expect(await clientRead(pending, `registrations/${alice.uid}`)).toBe(403);
   });
 

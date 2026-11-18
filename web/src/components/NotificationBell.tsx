@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { useEffect, useId, useRef, useState } from "react";
 import type { AppNotification } from "@fsm/shared";
 import { api } from "@/lib/api";

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "./ServerLink";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useGame } from "./GameProvider";
@@ -13,6 +13,7 @@ import { Moments } from "./Moments";
 import { NotificationBell } from "./NotificationBell";
 import { RecapCard } from "./RecapCard";
 import { NavIcon } from "./NavIcons";
+import { ServerPicker } from "./ServerPicker";
 
 const NAV = [
   { href: "/", label: "Feed", short: "Feed", icon: "feed" },
@@ -45,6 +46,10 @@ export function Shell({ children }: { children: ReactNode }) {
   }
   if (!g.user) return <main className="page"><SignIn /></main>;
 
+  const maintenanceBanner = g.maintenance && (
+    <div className="banner" role="status">The game is being upgraded, back shortly. Trading and posting are paused.</div>
+  );
+
   const previewBanner = g.previewingAsPlayer && (
     <div className="banner preview-banner" role="status">
       <span>Viewing as a player: admin tools are hidden.</span>
@@ -53,6 +58,30 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 
   if (!g.isMember) {
+    // Two or more memberships and nothing says which: the picker (never shown to single-membership players).
+    if (g.landing.kind === "picker") return <main className="page"><ServerPicker /></main>;
+    // The admin before any server exists (or before they're in one): just the Admin page.
+    if (g.isRealAdmin && !g.previewingAsPlayer && g.landing.kind === "none") {
+      return (
+        <>
+          <div className="chrome">
+            <header className="topbar">
+              <Link href="/admin/" className="brand" aria-label="Stonker">
+                <span aria-hidden="true">📈</span>
+                <span>Stonker</span>
+              </Link>
+              <div className="me">
+                <button type="button" className="link" onClick={g.signOut}>Sign out</button>
+              </div>
+            </header>
+          </div>
+          {maintenanceBanner}
+          <main className="page">
+            {path.startsWith("/admin") ? children : <p>Create a server from the <Link href="/admin/">Admin page</Link> to get started.</p>}
+          </main>
+        </>
+      );
+    }
     return (
       <>
         {previewBanner}
@@ -60,10 +89,6 @@ export function Shell({ children }: { children: ReactNode }) {
       </>
     );
   }
-
-  const maintenanceBanner = g.maintenance && (
-    <div className="banner" role="status">The game is being upgraded, back shortly. Trading and posting are paused.</div>
-  );
 
   const nav = g.isAdmin ? [...NAV, ADMIN_NAV] : NAV;
   const me = g.me ? g.playerById.get(g.me.uid) : undefined;
@@ -77,6 +102,8 @@ export function Shell({ children }: { children: ReactNode }) {
             <span aria-hidden="true">📈</span>
             <span>Stonker</span>
           </Link>
+          {/* Only people in two or more servers ever see a server name. */}
+          {g.showServerUi && g.server && <span className="server-name muted small" title="Current server">{g.server.name}</span>}
           <nav aria-label="Main" className="topnav">
             {nav.map((n) => (
               <Link key={n.href} href={n.href} aria-current={current(n.href)}>
@@ -99,6 +126,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </div>
       {maintenanceBanner}
       {previewBanner}
+      {g.server?.status === "archived" && <div className="banner" role="status">This game has ended. You can look around, but nothing can be changed.</div>}
       {g.me && !g.me.isActive && <div className="banner">Your stock has been delisted. You can browse but not trade.</div>}
       <main className="page">
         {g.recap && <RecapCard />}

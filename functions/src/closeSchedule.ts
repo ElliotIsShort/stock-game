@@ -2,7 +2,7 @@ import { HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
 import { closeTimeError, closeTimeMessage, effectiveClosesAt, formatCloseTime, type Post } from "@fsm/shared";
-import { inMaintenance, gameCall, asObject, auditEntry, auditRef, db, ensureClosesAt, readState, refs, requireAdmin } from "./common";
+import { inMaintenance, gameCall, gameCtx, auditEntry, auditRef, db, ensureClosesAt, globalRefs, readState, refs } from "./common";
 import { enqueueDiscord } from "./discord";
 import { liquidateDueMarginCalls, type LiquidationResult } from "./margin";
 import { closeWeek, type CloseResult } from "./weeklyClose";
@@ -13,22 +13,24 @@ import { closeWeek, type CloseResult } from "./weeklyClose";
  * Discord. Scheduled closes then move it on by whole weeks.
  */
 export const setCloseTime = gameCall(async (req) => {
-  const adminId = await requireAdmin(req);
-  const closesAt = asObject(req.data).closesAt;
+  const { uid: adminId, serverId, R, data } = await gameCtx(req, { admin: true });
+  const closesAt = data.closesAt;
   const now = Date.now();
   const error = closeTimeError(closesAt, now);
   if (error) throw new HttpsError("invalid-argument", error);
   const at = closesAt as number;
 
   return db.runTransaction(async (tx) => {
-    const { state, exists } = await readState(tx, now);
+    const { state, exists } = await readState(tx, R, now);
     const before = effectiveClosesAt(state, now);
-    if (exists) tx.update(refs.state(), { closesAt: at });
-    else tx.set(refs.state(), { ...state, closesAt: at });
+    if (exists) tx.update(R.state(), { closesAt: at });
+    else tx.set(R.state(), { ...state, closesAt: at });
+    // Denormalised copy the scheduler queries (kept in step in the same transaction).
+    tx.update(R.server(), { closesAt: at });
 
     const when = formatCloseTime(at);
     const was = formatCloseTime(before);
-    const postRef = db.collection("posts").doc();
+    const postRef = R.col("posts").doc();
     const post: Post = {
       id: postRef.id,
       authorId: "system",
@@ -45,43 +47,52 @@ export const setCloseTime = gameCall(async (req) => {
       createdAt: now,
     };
     tx.set(postRef, post);
-    enqueueDiscord(tx, "normal", "closeTime", closeTimeMessage(state.currentWeek, when, was), now);
-    tx.set(auditRef(), auditEntry(adminId, "setCloseTime", "meta/state", { week: state.currentWeek, closesAt: { from: before, to: at } }, now));
+    enqueueDiscord(tx, R, "normal", "closeTime", closeTimeMessage(state.currentWeek, when, was), now);
+    tx.set(auditRef(), auditEntry(adminId, "setCloseTime", "meta/state", { week: state.currentWeek, closesAt: { from: before, to: at } }, now, serverId));
     return { week: state.currentWeek, closesAt: at, previous: before };
   });
 });
 
 export interface SchedulerRun {
-  /** The close time the scheduler saw (null when there's no game state yet). */
-  closesAt: number | null;
-  close: CloseResult | null;
+  /** Servers whose week was due this tick, with what the close did. */
+  closes: { serverId: string; close: CloseResult }[];
   liquidations: LiquidationResult[];
 }
 
 /**
- * One scheduler tick. The cheap path (not due yet) is a single document read.
- * When due, `closeWeek` re-checks inside its transaction with the week number
- * this tick saw, so overlapping ticks can never close twice.
+ * One scheduler tick. The cheap path is ONE query on `servers` (active and
+ * `closesAt <= now`) that returns nothing, plus the empty margin-deadline
+ * collection-group query. For each due server, `closeWeek` re-checks inside
+ * its transaction with the week number this tick saw, so overlapping ticks can
+ * never close twice. Only the due servers are touched, never the others.
  */
 export async function runScheduler(now: number): Promise<SchedulerRun> {
-  const snap = await refs.state().get();
-  if (!snap.exists) return { closesAt: null, close: null, liquidations: [] };
-  const state = snap.data()!;
-  const closesAt = typeof state.closesAt === "number" ? state.closesAt : await ensureClosesAt(now);
-  let close: CloseResult | null = null;
-  if (closesAt !== null && now >= closesAt) {
-    close = await closeWeek({ trigger: "schedule", actorId: null, expectedWeek: state.currentWeek });
-    logger.info("Scheduled weekly close", close);
+  const due = await globalRefs.servers().where("status", "==", "active").where("closesAt", "<=", now).get();
+  const closes: SchedulerRun["closes"] = [];
+  for (const server of due.docs) {
+    const R = refs(server.id);
+    try {
+      const snap = await R.state().get();
+      if (!snap.exists) continue;
+      const state = snap.data()!;
+      const closesAt = typeof state.closesAt === "number" ? state.closesAt : await ensureClosesAt(R, now);
+      if (closesAt === null || now < closesAt) continue;
+      const close = await closeWeek(R, { trigger: "schedule", actorId: null, expectedWeek: state.currentWeek });
+      logger.info("Scheduled weekly close", { serverId: server.id, ...close });
+      closes.push({ serverId: server.id, close });
+    } catch (err) {
+      logger.error("Scheduled close failed", { serverId: server.id, err });
+    }
   }
-  // After any close (its allowances may have cleared a call): margin calls past their deadline.
+  // After any close (its allowances may have cleared a call): margin calls past their deadline, in every active server.
   const liquidations = await liquidateDueMarginCalls(now);
-  return { closesAt, close, liquidations };
+  return { closes, liquidations };
 }
 
 /**
  * Every minute (Cloud Scheduler job #2 of the 3 free per billing account; the
  * other is `discordDigest`). While nothing is due each tick costs 2 reads
- * (meta/state + an empty margin-deadline query): ≈1,440 invocations and
+ * (one servers query + an empty margin-deadline query): ≈1,440 invocations and
  * ≈2,880 reads a day. No retries: the next tick is a minute away anyway.
  */
 export const closeScheduler = onSchedule({ schedule: "every 1 minutes", timeoutSeconds: 300, retryCount: 0 }, async () => {

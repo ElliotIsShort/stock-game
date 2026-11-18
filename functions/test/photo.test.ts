@@ -39,7 +39,7 @@ describe("stock photos", () => {
 
   it("non-players can't set photos", async () => {
     const stranger = await signUp("stranger");
-    await expectCallError(call(stranger, "setStockPhoto", { photo: jpegDataUrl() }), "NOT_FOUND");
+    await expectCallError(call(stranger, "setStockPhoto", { photo: jpegDataUrl() }), "PERMISSION_DENIED");
   });
 
   it("photos are readable by members only and never writable by clients", async () => {

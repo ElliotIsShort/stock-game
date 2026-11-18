@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import { prizeSplitText } from "@fsm/shared";
 import { Avatar } from "@/components/Avatar";
 import { useGame } from "@/components/GameProvider";
-import Link from "next/link";
+import Link from "@/components/ServerLink";
 import { changeClass, gbp, pct, profileHref } from "@/lib/format";
 import { liveContenders, liveGrowth } from "@/lib/standings";
 

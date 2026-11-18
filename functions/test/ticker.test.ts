@@ -53,7 +53,7 @@ describe("tickers", () => {
   it("only admins can change someone else's ticker; non-players can't set one", async () => {
     await expectCallError(call(bob, "setTicker", { uid: alice.uid, ticker: "XYZ" }), "PERMISSION_DENIED");
     const stranger = await signUp("stranger");
-    await expectCallError(call(stranger, "setTicker", { ticker: "XYZ" }), "NOT_FOUND");
+    await expectCallError(call(stranger, "setTicker", { ticker: "XYZ" }), "PERMISSION_DENIED");
   });
 
   it("backfills stocks listed before tickers existed, avoiding clashes", async () => {

@@ -1,8 +1,15 @@
 rules_version = '2';
-
 // All writes go through Cloud Functions (Admin SDK bypasses these rules).
 // Clients can only read, so cash, pool and price fields can never be
 // written directly from the browser.
+//
+// Game data lives under servers/{serverId}/... Membership of a server is
+// DEFINED by the existence of servers/{serverId}/players/{uid}. `users/{uid}`
+// is only a lookup cache for the client and is never trusted here.
+//
+// Each exists() below is a billed read (cached per request). The legacy
+// top-level game collections (players, stocks, trades, ...) fall through to
+// the deny-all at the bottom: they are only the migration rollback copy.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -11,44 +18,58 @@ service cloud.firestore {
     function isAdmin() {
       return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
-    function isPlayer() {
-      return signedIn() && exists(/databases/$(database)/documents/players/$(request.auth.uid));
+    function memberOf(serverId) {
+      return signedIn() && exists(/databases/$(database)/documents/servers/$(serverId)/players/$(request.auth.uid));
     }
-    function member() {
-      return isPlayer() || isAdmin();
+    // Members of that server, or an admin (the owner administers every server).
+    function canRead(serverId) {
+      return memberOf(serverId) || isAdmin();
     }
 
-    match /players/{uid} {
-      allow read: if member() || (signedIn() && request.auth.uid == uid);
+    match /servers/{serverId} {
+      // The server doc carries the name, status and close time; the webhook lives in private/discord.
+      allow read: if canRead(serverId);
+      allow write: if false;
+
+      match /players/{uid} {
+        allow read: if canRead(serverId) || (signedIn() && request.auth.uid == uid);
+        allow write: if false;
+      }
+      match /stocks/{id}           { allow read: if canRead(serverId); allow write: if false; }
+      match /holdings/{id}         { allow read: if canRead(serverId); allow write: if false; }
+      match /trades/{id}           { allow read: if canRead(serverId); allow write: if false; }
+      match /posts/{id}            { allow read: if canRead(serverId); allow write: if false; }
+      match /weeklyReports/{id}    { allow read: if canRead(serverId); allow write: if false; }
+      match /meta/{id}             { allow read: if canRead(serverId); allow write: if false; }
+      match /photos/{id}           { allow read: if canRead(serverId); allow write: if false; }
+      match /netWorthHistory/{id}  { allow read: if canRead(serverId); allow write: if false; }
+      match /netWorthSeries/{id}   { allow read: if canRead(serverId); allow write: if false; }
+      match /shorts/{id}           { allow read: if canRead(serverId); allow write: if false; }
+      match /config/{id}           { allow read: if canRead(serverId); allow write: if false; }
+      match /content/{id}          { allow read: if canRead(serverId); allow write: if false; }
+      // Private to their owner (and still scoped to this server): price alerts and in-app notifications.
+      match /alerts/{id} {
+        allow read: if signedIn() && resource.data.uid == request.auth.uid;
+        allow write: if false;
+      }
+      match /notifications/{id} {
+        allow read: if signedIn() && resource.data.uid == request.auth.uid;
+        allow write: if false;
+      }
+      // private/* (the Discord webhook), discordOutbox and discordState are server-only:
+      // they match nothing here and are denied by the catch-all below.
+    }
+
+    // Lookup cache of a user's server memberships (maintained by functions). Own doc only.
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
     }
-    match /stocks/{id}         { allow read: if member(); allow write: if false; }
-    match /holdings/{id}       { allow read: if member(); allow write: if false; }
-    match /trades/{id}         { allow read: if member(); allow write: if false; }
-    match /posts/{id}          { allow read: if member(); allow write: if false; }
-    match /weeklyReports/{id}  { allow read: if member(); allow write: if false; }
-    match /meta/{id}           { allow read: if member(); allow write: if false; }
-    match /photos/{id}         { allow read: if member(); allow write: if false; }
-    match /netWorthHistory/{id} { allow read: if member(); allow write: if false; }
-    match /netWorthSeries/{id} { allow read: if member(); allow write: if false; }
-    match /shorts/{id}         { allow read: if member(); allow write: if false; }
-    match /config/{id}         { allow read: if signedIn(); allow write: if false; }
-    match /content/{id}        { allow read: if signedIn(); allow write: if false; }
+
+    // Global.
     match /devlog/{id}         { allow read: if signedIn(); allow write: if false; }
     // Global maintenance switch: everyone signed in reads it (for the banner).
     match /system/{id}         { allow read: if signedIn(); allow write: if false; }
-
-    // Private to their owner: your price alerts and in-app notifications.
-    match /alerts/{id} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
-      allow write: if false;
-    }
-    match /notifications/{id} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
-      allow write: if false;
-    }
-    // discordOutbox / discordState are server-only and fall through to the deny-all below.
-
     match /registrations/{uid} {
       allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
       allow write: if false;
@@ -61,7 +82,6 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow write: if false;
     }
-
     match /{document=**} {
       allow read, write: if false;
     }
